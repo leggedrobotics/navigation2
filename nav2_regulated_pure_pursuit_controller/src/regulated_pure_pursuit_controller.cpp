@@ -158,6 +158,15 @@ double calculateCurvature(geometry_msgs::msg::Point lookahead_point)
   }
 }
 
+double clampCurvatureToTurningRadius(double curvature, double min_turning_radius)
+{
+  if (min_turning_radius <= 0.0) {
+    return curvature;
+  }
+  const double max_curvature = 1.0 / min_turning_radius;
+  return std::clamp(curvature, -max_curvature, max_curvature);
+}
+
 geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocityCommands(
   const geometry_msgs::msg::PoseStamped & pose,
   const geometry_msgs::msg::Twist & speed,
@@ -211,6 +220,8 @@ geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocity
     regulation_curvature = calculateCurvature(curvature_lookahead_pose.pose.position);
     curvature_carrot_pub_->publish(createCarrotMsg(curvature_lookahead_pose));
   }
+  regulation_curvature = clampCurvatureToTurningRadius(
+    regulation_curvature, params_->min_turning_radius);
 
   // Setting the velocity direction
   double x_vel_sign = 1.0;
@@ -235,9 +246,11 @@ geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocity
     rotateToHeading(linear_vel, angular_vel, angle_to_heading, speed);
   } else {
     is_rotating_to_heading_ = false;
+    const double pose_cost = params_->use_cost_regulated_linear_velocity_scaling ?
+      collision_checker_->costAtPose(pose.pose.position.x, pose.pose.position.y) : 0.0;
     applyConstraints(
       regulation_curvature, speed,
-      collision_checker_->costAtPose(pose.pose.position.x, pose.pose.position.y), transformed_plan,
+      pose_cost, transformed_plan,
       linear_vel, x_vel_sign);
 
     if (cancelling_) {

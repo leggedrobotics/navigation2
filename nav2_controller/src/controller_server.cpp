@@ -677,13 +677,30 @@ void ControllerServer::computeAndPublishVelocity()
 
   geometry_msgs::msg::Twist twist = getThresholdedTwist(odom_sub_->getRawTwist());
 
-  geometry_msgs::msg::PoseStamped goal =
-    path_handlers_[current_path_handler_]->getTransformedGoal(pose.header.stamp);
-  // Get the [start, end) iterators under map frame to be used for control.
-  auto [closest_point, pruned_plan_end] =
-    path_handlers_[current_path_handler_]->findPlanSegment(pose);
-  transformed_global_plan_ =
-    path_handlers_[current_path_handler_]->transformLocalPlan(closest_point, pruned_plan_end);
+  geometry_msgs::msg::PoseStamped goal;
+  try {
+    goal = path_handlers_[current_path_handler_]->getTransformedGoal(pose.header.stamp);
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Path handler getTransformedGoal failed: %s", e.what());
+    throw;
+  }
+
+  nav2_core::PathSegment plan_segment;
+  try {
+    plan_segment = path_handlers_[current_path_handler_]->findPlanSegment(pose);
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Path handler findPlanSegment failed: %s", e.what());
+    throw;
+  }
+  auto [closest_point, pruned_plan_end] = plan_segment;
+
+  try {
+    transformed_global_plan_ =
+      path_handlers_[current_path_handler_]->transformLocalPlan(closest_point, pruned_plan_end);
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Path handler transformLocalPlan failed: %s", e.what());
+    throw;
+  }
   auto path = std::make_unique<nav_msgs::msg::Path>(transformed_global_plan_);
   if (transformed_plan_pub_->get_subscription_count() > 0) {
     transformed_plan_pub_->publish(std::move(path));
@@ -723,6 +740,9 @@ void ControllerServer::computeAndPublishVelocity()
     } else {
       throw nav2_core::NoValidControl(e.what());
     }
+  } catch (const std::exception & e) {
+    RCLCPP_ERROR(get_logger(), "Controller computeVelocityCommands failed: %s", e.what());
+    throw;
   }
 
   RCLCPP_DEBUG(get_logger(), "Publishing velocity at time %.2f", now().seconds());

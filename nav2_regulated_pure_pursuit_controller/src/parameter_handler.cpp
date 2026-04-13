@@ -93,6 +93,8 @@ ParameterHandler::ParameterHandler(
     plugin_name_ + ".inflation_cost_scaling_factor", 3.0);
   params_.regulated_linear_scaling_min_radius = node->declare_or_get_parameter(
     plugin_name_ + ".regulated_linear_scaling_min_radius", 0.90);
+  params_.min_turning_radius = node->declare_or_get_parameter(
+    plugin_name_ + ".min_turning_radius", 0.0);
   params_.regulated_linear_scaling_min_speed = node->declare_or_get_parameter(
     plugin_name_ + ".regulated_linear_scaling_min_speed", 0.25);
   params_.use_fixed_curvature_lookahead = node->declare_or_get_parameter(
@@ -273,6 +275,8 @@ ParameterHandler::updateParametersCallback(
         params_.cost_scaling_gain = parameter.as_double();
       } else if (param_name == plugin_name_ + ".regulated_linear_scaling_min_radius") {
         params_.regulated_linear_scaling_min_radius = parameter.as_double();
+      } else if (param_name == plugin_name_ + ".min_turning_radius") {
+        params_.min_turning_radius = parameter.as_double();
       } else if (param_name == plugin_name_ + ".regulated_linear_scaling_min_speed") {
         params_.regulated_linear_scaling_min_speed = parameter.as_double();
       } else if (param_name == plugin_name_ + ".cancel_deceleration") {
