@@ -76,6 +76,8 @@ void FeasiblePathHandler::initialize(
     plugin_name + ".inversion_lateral_tolerance", inversion_xy_tolerance_);
   inversion_yaw_tolerance_ = node->declare_or_get_parameter(
     plugin_name + ".inversion_yaw_tolerance", 0.4);
+  inversion_forward_hold_distance_ = node->declare_or_get_parameter(
+    plugin_name + ".inversion_forward_hold_distance", 0.0);
   minimum_rotation_angle_ = node->declare_or_get_parameter(
     plugin_name + ".minimum_rotation_angle", 0.785);
   if (max_robot_pose_search_dist_ < 0.0) {
@@ -172,6 +174,38 @@ bool FeasiblePathHandler::isWithinInversionLongitudinalTolerances(
          std::abs(angle_distance) <= inversion_yaw_tolerance_;
 }
 
+void FeasiblePathHandler::appendInversionForwardHoldPose()
+{
+  if (!enforce_path_inversion_ || inversion_forward_hold_distance_ <= 0.0 ||
+    constraint_locale_ < 2u || constraint_locale_ >= global_plan_.poses.size())
+  {
+    return;
+  }
+
+  const auto & prev_pose = global_plan_.poses[constraint_locale_ - 2u].pose;
+  const auto & cusp_pose = global_plan_.poses[constraint_locale_ - 1u].pose;
+  const auto & next_pose = global_plan_.poses[constraint_locale_].pose;
+
+  const double incoming_x = cusp_pose.position.x - prev_pose.position.x;
+  const double incoming_y = cusp_pose.position.y - prev_pose.position.y;
+  const double outgoing_x = next_pose.position.x - cusp_pose.position.x;
+  const double outgoing_y = next_pose.position.y - cusp_pose.position.y;
+  const double incoming_norm = std::hypot(incoming_x, incoming_y);
+  const double outgoing_norm = std::hypot(outgoing_x, outgoing_y);
+  if (incoming_norm <= 1e-4 || outgoing_norm <= 1e-4) {
+    return;
+  }
+
+  if (incoming_x * outgoing_x + incoming_y * outgoing_y >= 0.0) {
+    return;
+  }
+
+  auto hold_pose = global_plan_.poses[constraint_locale_ - 1u];
+  hold_pose.pose.position.x += incoming_x / incoming_norm * inversion_forward_hold_distance_;
+  hold_pose.pose.position.y += incoming_y / incoming_norm * inversion_forward_hold_distance_;
+  global_plan_up_to_constraint_.poses.push_back(hold_pose);
+}
+
 void FeasiblePathHandler::setPlan(const nav_msgs::msg::Path & path)
 {
   std::lock_guard<std::mutex> lock_reinit(mutex_);
@@ -180,6 +214,7 @@ void FeasiblePathHandler::setPlan(const nav_msgs::msg::Path & path)
   if (enforce_path_inversion_ || enforce_path_rotation_) {
     constraint_locale_ = nav2_util::removePosesAfterFirstConstraint(global_plan_up_to_constraint_,
       enforce_path_inversion_, minimum_rotation_angle_);
+    appendInversionForwardHoldPose();
   }
 }
 
@@ -289,6 +324,7 @@ nav_msgs::msg::Path FeasiblePathHandler::transformLocalPlan(
       global_plan_up_to_constraint_ = global_plan_;
       constraint_locale_ = nav2_util::removePosesAfterFirstConstraint(global_plan_up_to_constraint_,
         enforce_path_inversion_, minimum_rotation_angle_);
+      appendInversionForwardHoldPose();
     }
   }
 
@@ -365,6 +401,8 @@ FeasiblePathHandler::updateParametersCallback(
         inversion_lateral_tolerance_ = parameter.as_double();
       } else if (param_name == plugin_name_ + ".inversion_yaw_tolerance") {
         inversion_yaw_tolerance_ = parameter.as_double();
+      } else if (param_name == plugin_name_ + ".inversion_forward_hold_distance") {
+        inversion_forward_hold_distance_ = parameter.as_double();
       } else if (param_name == plugin_name_ + ".prune_distance") {
         prune_distance_ = parameter.as_double();
       } else if (param_name == plugin_name_ + ".minimum_rotation_angle") {

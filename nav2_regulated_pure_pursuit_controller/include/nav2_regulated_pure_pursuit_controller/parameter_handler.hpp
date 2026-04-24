@@ -59,6 +59,7 @@ struct Parameters
   double cancel_deceleration;
   double rotate_to_heading_min_angle;
   bool allow_reversing;
+  bool use_path_segment_direction_for_reversing;
   bool interpolate_curvature_after_goal;
   bool use_collision_detection;
   bool stateful;

@@ -134,6 +134,13 @@ protected:
     const geometry_msgs::msg::PoseStamped & robot_pose) const;
 
   /**
+    * @brief Extends the pre-inversion plan slightly past the cusp along the
+    * incoming direction so Ackermann controllers can finish aligning before
+    * the reverse segment is exposed.
+    */
+  void appendInversionForwardHoldPose();
+
+  /**
     * @brief Prune a path to only interesting portions
     * @param plan Plan to prune
     * @param end Final path iterator
@@ -157,6 +164,7 @@ protected:
   double max_robot_pose_search_dist_, transform_tolerance_, prune_distance_;
   float inversion_xy_tolerance_, inversion_yaw_tolerance_, minimum_rotation_angle_;
   float inversion_longitudinal_tolerance_, inversion_lateral_tolerance_;
+  double inversion_forward_hold_distance_;
 
   /**
    * @brief Validate incoming parameter updates before applying them.

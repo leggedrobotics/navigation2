@@ -348,6 +348,37 @@ TEST(PathHandlerTests, TestInversionLongitudinalToleranceAllowsLateralOffset)
   EXPECT_FALSE(handler.isWithinInversionTolerancesWrapper(robot_pose));
 }
 
+TEST(PathHandlerTests, TestInversionForwardHoldExtendsPreCuspPlan)
+{
+  nav_msgs::msg::Path path;
+  path.header.frame_id = "map";
+  for (const double x : {0.0, 1.0, 2.0, 1.0, 0.0}) {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.header.frame_id = "map";
+    pose.pose.position.x = x;
+    pose.pose.orientation.w = 1.0;
+    path.poses.push_back(pose);
+  }
+
+  PathHandlerWrapper handler;
+  auto node = std::make_shared<nav2::LifecycleNode>("forward_hold_cusp_node");
+  node->declare_parameter("dummy.enforce_path_inversion", true);
+  node->declare_parameter("dummy.inversion_forward_hold_distance", 0.5);
+  auto costmap_ros = std::make_shared<nav2_costmap_2d::Costmap2DROS>(
+    "dummy_costmap", "", true);
+  rclcpp_lifecycle::State state;
+  costmap_ros->on_configure(state);
+
+  handler.initialize(node, node->get_logger(), "dummy", costmap_ros, costmap_ros->getTfBuffer());
+  handler.setPlan(path);
+
+  const auto & path_inverted = handler.getInvertedPath();
+  ASSERT_EQ(path_inverted.poses.size(), 4u);
+  EXPECT_DOUBLE_EQ(path_inverted.poses[2].pose.position.x, 2.0);
+  EXPECT_DOUBLE_EQ(path_inverted.poses[3].pose.position.x, 2.5);
+  EXPECT_DOUBLE_EQ(path_inverted.poses[3].pose.position.y, 0.0);
+}
+
 TEST(PathHandlerTests, TestTransformedGoal)
 {
   PathHandlerWrapper handler;
@@ -392,6 +423,7 @@ TEST(PathHandlerTests, TestDynamicParams)
     rclcpp::Parameter("dummy.inversion_longitudinal_tolerance", 250.0),
     rclcpp::Parameter("dummy.inversion_lateral_tolerance", 275.0),
     rclcpp::Parameter("dummy.inversion_yaw_tolerance", 300.0),
+    rclcpp::Parameter("dummy.inversion_forward_hold_distance", 350.0),
     rclcpp::Parameter("dummy.prune_distance", 400.0),
     rclcpp::Parameter("dummy.minimum_rotation_angle", 500.0),
     rclcpp::Parameter("dummy.enforce_path_inversion", true),
@@ -407,6 +439,7 @@ TEST(PathHandlerTests, TestDynamicParams)
   EXPECT_EQ(node->get_parameter("dummy.inversion_longitudinal_tolerance").as_double(), 250.0);
   EXPECT_EQ(node->get_parameter("dummy.inversion_lateral_tolerance").as_double(), 275.0);
   EXPECT_EQ(node->get_parameter("dummy.inversion_yaw_tolerance").as_double(), 300.0);
+  EXPECT_EQ(node->get_parameter("dummy.inversion_forward_hold_distance").as_double(), 350.0);
   EXPECT_EQ(node->get_parameter("dummy.prune_distance").as_double(), 400.0);
   EXPECT_EQ(node->get_parameter("dummy.minimum_rotation_angle").as_double(), 500.0);
   EXPECT_EQ(node->get_parameter("dummy.enforce_path_inversion").as_bool(), true);

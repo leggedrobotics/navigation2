@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <limits>
 #include <memory>
@@ -213,10 +214,7 @@ geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocity
   }
 
   // Setting the velocity direction
-  double x_vel_sign = 1.0;
-  if (params_->allow_reversing) {
-    x_vel_sign = carrot_pose.pose.position.x >= 0.0 ? 1.0 : -1.0;
-  }
+  double x_vel_sign = getVelocitySign(transformed_plan, carrot_pose);
 
   linear_vel = params_->max_linear_vel;
 
@@ -356,6 +354,65 @@ bool RegulatedPurePursuitController::shouldRotateToGoalHeading(
   }
 
   return dist_to_goal < goal_dist_tol_;
+}
+
+double RegulatedPurePursuitController::getVelocitySign(
+  const nav_msgs::msg::Path & transformed_plan,
+  const geometry_msgs::msg::PoseStamped & carrot_pose)
+{
+  if (!params_->allow_reversing) {
+    return 1.0;
+  }
+
+  auto carrot_sign = [&carrot_pose]() {
+    const double carrot_x = carrot_pose.pose.position.x;
+    return carrot_x >= 0.0 ? 1.0 : -1.0;
+  };
+
+  if (!params_->use_path_segment_direction_for_reversing) {
+    return carrot_sign();
+  }
+
+  if (transformed_plan.poses.size() < 2) {
+    return carrot_sign();
+  }
+
+  size_t segment_idx = 0;
+  bool found_segment = false;
+  for (size_t i = 0; i + 1 < transformed_plan.poses.size(); ++i) {
+    const auto & start = transformed_plan.poses[i].pose.position;
+    const auto & end = transformed_plan.poses[i + 1].pose.position;
+    const double segment_dist = hypot(end.x - start.x, end.y - start.y);
+    if (segment_dist <= 1e-4) {
+      continue;
+    }
+
+    segment_idx = i;
+    found_segment = true;
+    break;
+  }
+
+  if (!found_segment) {
+    return carrot_sign();
+  }
+
+  const auto & segment_start = transformed_plan.poses[segment_idx].pose;
+  const auto & segment_end = transformed_plan.poses[segment_idx + 1].pose;
+  const double dx = segment_end.position.x - segment_start.position.x;
+  const double dy = segment_end.position.y - segment_start.position.y;
+  const double segment_dist = hypot(dx, dy);
+  const double ux = dx / segment_dist;
+  const double uy = dy / segment_dist;
+  const double start_heading = tf2::getYaw(segment_start.orientation);
+  const double end_heading = tf2::getYaw(segment_end.orientation);
+  const double alignment = 0.5 * (
+    ux * std::cos(start_heading) + uy * std::sin(start_heading) +
+    ux * std::cos(end_heading) + uy * std::sin(end_heading));
+  if (std::abs(alignment) < 0.25) {
+    return carrot_sign();
+  }
+
+  return alignment > 0.0 ? 1.0 : -1.0;
 }
 
 void RegulatedPurePursuitController::rotateToHeading(

@@ -150,6 +150,16 @@ protected:
   bool shouldRotateToGoalHeading(const geometry_msgs::msg::PoseStamped & carrot_pose);
 
   /**
+   * @brief Select forward/reverse direction from the current path segment
+   * @param transformed_plan current path in the robot frame
+   * @param carrot_pose current lookahead point
+   * @return Velocity sign, +1.0 for forward and -1.0 for reverse
+   */
+  double getVelocitySign(
+    const nav_msgs::msg::Path & transformed_plan,
+    const geometry_msgs::msg::PoseStamped & carrot_pose);
+
+  /**
    * @brief Create a smooth and kinematically smoothed rotation command
    * @param linear_vel linear velocity
    * @param angular_vel angular velocity

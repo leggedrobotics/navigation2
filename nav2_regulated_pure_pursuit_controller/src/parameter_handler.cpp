@@ -117,6 +117,9 @@ ParameterHandler::ParameterHandler(
     plugin_name_ + ".cancel_deceleration", 3.2);
   params_.allow_reversing =
     node->declare_or_get_parameter(plugin_name_ + ".allow_reversing", false);
+  params_.use_path_segment_direction_for_reversing =
+    node->declare_or_get_parameter(
+    plugin_name_ + ".use_path_segment_direction_for_reversing", false);
 
   params_.interpolate_curvature_after_goal = node->declare_or_get_parameter(
     plugin_name_ + ".interpolate_curvature_after_goal", false);
@@ -301,6 +304,8 @@ ParameterHandler::updateParametersCallback(
         params_.use_cancel_deceleration = parameter.as_bool();
       } else if (param_name == plugin_name_ + ".allow_reversing") {
         params_.allow_reversing = parameter.as_bool();
+      } else if (param_name == plugin_name_ + ".use_path_segment_direction_for_reversing") {
+        params_.use_path_segment_direction_for_reversing = parameter.as_bool();
       } else if (param_name == plugin_name_ + ".interpolate_curvature_after_goal") {
         params_.interpolate_curvature_after_goal = parameter.as_bool();
       } else if (param_name == plugin_name_ + ".use_dynamic_window") {

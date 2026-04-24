@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <math.h>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <vector>
@@ -28,7 +29,36 @@
 #include "nav2_core/controller_exceptions.hpp"
 #include "geometry_msgs/msg/transform_stamped.hpp"
 #include "nav2_controller/plugins/feasible_path_handler.hpp"
-#include "nav2_controller/plugins/simple_goal_checker.hpp"
+
+class TestGoalChecker : public nav2_core::GoalChecker
+{
+public:
+  void initialize(
+    const nav2::LifecycleNode::WeakPtr &,
+    const std::string &,
+    const std::shared_ptr<nav2_costmap_2d::Costmap2DROS>) override
+  {}
+
+  void reset() override {}
+
+  bool isGoalReached(
+    const geometry_msgs::msg::Pose &,
+    const geometry_msgs::msg::Pose &,
+    const geometry_msgs::msg::Twist &,
+    const nav_msgs::msg::Path &) override
+  {
+    return false;
+  }
+
+  bool getTolerances(
+    geometry_msgs::msg::Pose & pose_tolerance,
+    geometry_msgs::msg::Twist & vel_tolerance) override
+  {
+    pose_tolerance.position.x = 0.25;
+    vel_tolerance = geometry_msgs::msg::Twist();
+    return true;
+  }
+};
 
 class BasicAPIRPP : public nav2_regulated_pure_pursuit_controller::RegulatedPurePursuitController
 {
@@ -63,6 +93,23 @@ public:
   bool shouldRotateToGoalHeadingWrapper(const geometry_msgs::msg::PoseStamped & carrot_pose)
   {
     return shouldRotateToGoalHeading(carrot_pose);
+  }
+
+  double getVelocitySignWrapper(const nav_msgs::msg::Path & path, double carrot_x = 0.0)
+  {
+    geometry_msgs::msg::PoseStamped carrot_pose;
+    carrot_pose.pose.position.x = carrot_x;
+    return getVelocitySign(path, carrot_pose);
+  }
+
+  void setAllowReversing(bool allow_reversing)
+  {
+    params_->allow_reversing = allow_reversing;
+  }
+
+  void setUsePathSegmentDirectionForReversing(bool use_path_segment_direction)
+  {
+    params_->use_path_segment_direction_for_reversing = use_path_segment_direction;
   }
 
   void rotateToHeadingWrapper(
@@ -416,6 +463,7 @@ TEST(RegulatedPurePursuitTest, testDynamicParameter)
       rclcpp::Parameter("test.use_cost_regulated_linear_velocity_scaling", false),
       rclcpp::Parameter("test.inflation_cost_scaling_factor", 1.0),
       rclcpp::Parameter("test.allow_reversing", false),
+      rclcpp::Parameter("test.use_path_segment_direction_for_reversing", true),
       rclcpp::Parameter("test.use_rotate_to_heading", false),
       rclcpp::Parameter("test.stateful", false),
       rclcpp::Parameter("test.use_dynamic_window", true),
@@ -456,6 +504,9 @@ TEST(RegulatedPurePursuitTest, testDynamicParameter)
     node->get_parameter(
       "test.use_cost_regulated_linear_velocity_scaling").as_bool(), false);
   EXPECT_EQ(node->get_parameter("test.allow_reversing").as_bool(), false);
+  EXPECT_EQ(
+    node->get_parameter(
+      "test.use_path_segment_direction_for_reversing").as_bool(), true);
   EXPECT_EQ(node->get_parameter("test.use_rotate_to_heading").as_bool(), false);
   EXPECT_EQ(node->get_parameter("test.stateful").as_bool(), false);
   EXPECT_EQ(node->get_parameter("test.use_dynamic_window").as_bool(), true);
@@ -484,6 +535,61 @@ TEST(RegulatedPurePursuitTest, testDynamicParameter)
   rclcpp::spin_until_future_complete(
     node->get_node_base_interface(),
     results4);
+}
+
+TEST(RegulatedPurePursuitTest, reversingDirectionUsesCurrentPathSegmentDirection)
+{
+  auto ctrl = std::make_shared<BasicAPIRPP>();
+  auto node = std::make_shared<nav2::LifecycleNode>("testRPPPathDirection");
+  std::string name = "PathFollower";
+  auto tf = std::make_shared<tf2_ros::Buffer>(node->get_clock());
+  auto costmap = std::make_shared<nav2_costmap_2d::Costmap2DROS>("fake_costmap");
+  rclcpp_lifecycle::State state;
+  costmap->on_configure(state);
+
+  ctrl->configure(node, name, tf, costmap);
+  ctrl->setAllowReversing(true);
+  ctrl->setUsePathSegmentDirectionForReversing(true);
+
+  nav_msgs::msg::Path path;
+  auto add_pose = [&path](double x, double y, double yaw) {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.pose.position.x = x;
+    pose.pose.position.y = y;
+    pose.pose.orientation.z = std::sin(yaw / 2.0);
+    pose.pose.orientation.w = std::cos(yaw / 2.0);
+    path.poses.push_back(pose);
+  };
+  add_pose(0.0, 0.0, M_PI / 2.0);
+  add_pose(0.0, 1.0, M_PI / 2.0);
+  add_pose(0.0, 0.4, M_PI / 2.0);
+
+  EXPECT_EQ(ctrl->getVelocitySignWrapper(path, -0.08), 1.0);
+  EXPECT_EQ(ctrl->getVelocitySignWrapper(path, 0.08), 1.0);
+
+  nav_msgs::msg::Path reverse_path;
+  auto add_reverse_pose = [&reverse_path](double x, double y, double yaw) {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.pose.position.x = x;
+    pose.pose.position.y = y;
+    pose.pose.orientation.z = std::sin(yaw / 2.0);
+    pose.pose.orientation.w = std::cos(yaw / 2.0);
+    reverse_path.poses.push_back(pose);
+  };
+  add_reverse_pose(0.0, 1.0, M_PI / 2.0);
+  add_reverse_pose(0.0, 0.4, M_PI / 2.0);
+
+  EXPECT_EQ(ctrl->getVelocitySignWrapper(reverse_path, 0.08), -1.0);
+  EXPECT_EQ(ctrl->getVelocitySignWrapper(reverse_path, -0.08), -1.0);
+
+  ctrl->setUsePathSegmentDirectionForReversing(false);
+  EXPECT_EQ(ctrl->getVelocitySignWrapper(path, -0.08), -1.0);
+  EXPECT_EQ(ctrl->getVelocitySignWrapper(reverse_path, 0.08), 1.0);
+
+  ctrl->setAllowReversing(false);
+  EXPECT_EQ(ctrl->getVelocitySignWrapper(reverse_path, -0.08), 1.0);
+
+  ctrl->cleanup();
 }
 
 TEST(RegulatedPurePursuitTest, computeVelocityByDWPP)
@@ -537,8 +643,7 @@ TEST(RegulatedPurePursuitTest, computeVelocityByDWPP)
   robot_pose.header.stamp = stamp;
   robot_pose.pose.orientation.w = 1.0;
   geometry_msgs::msg::Twist current_speed;
-  nav2_controller::SimpleGoalChecker checker;
-  checker.initialize(node, "checker", costmap);
+  TestGoalChecker checker;
 
   auto [closest_point, pruned_plan_end] = path_handler.findPlanSegment(robot_pose);
   nav_msgs::msg::Path transformed_global_plan = path_handler.transformLocalPlan(
