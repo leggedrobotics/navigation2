@@ -418,6 +418,14 @@ void CollisionMonitor::process(const Velocity & cmd_vel_in, const std_msgs::msg:
 
   // By default - there is no action
   Action robot_action{DO_NOTHING, cmd_vel_in, ""};
+
+  if (!enabled_) {
+    publishVelocity(robot_action, header);
+    publishPolygons();
+    robot_action_prev_ = robot_action;
+    return;
+  }
+
   // Polygon causing robot action (if any)
   std::shared_ptr<Polygon> action_polygon;
 
@@ -473,7 +481,7 @@ void CollisionMonitor::process(const Velocity & cmd_vel_in, const std_msgs::msg:
   }
 
   for (std::shared_ptr<Polygon> polygon : polygons_) {
-    if (!polygon->getEnabled() || !enabled_) {
+    if (!polygon->getEnabled()) {
       continue;
     }
     if (robot_action.action_type == STOP) {

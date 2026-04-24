@@ -125,6 +125,15 @@ protected:
   bool isWithinInversionTolerances(const geometry_msgs::msg::PoseStamped & robot_pose);
 
   /**
+    * @brief Check whether the robot has reached the cusp along the incoming path
+    * direction while allowing lateral tracking error.
+    * @param robot_pose Robot's current pose to check
+    * @return bool If the robot has reached the inversion constraint corridor
+    */
+  bool isWithinInversionLongitudinalTolerances(
+    const geometry_msgs::msg::PoseStamped & robot_pose) const;
+
+  /**
     * @brief Prune a path to only interesting portions
     * @param plan Plan to prune
     * @param end Final path iterator
@@ -147,6 +156,7 @@ protected:
   bool reject_unit_path_, enforce_path_inversion_, enforce_path_rotation_;
   double max_robot_pose_search_dist_, transform_tolerance_, prune_distance_;
   float inversion_xy_tolerance_, inversion_yaw_tolerance_, minimum_rotation_angle_;
+  float inversion_longitudinal_tolerance_, inversion_lateral_tolerance_;
 
   /**
    * @brief Validate incoming parameter updates before applying them.

@@ -15,6 +15,7 @@
 // limitations under the License.
 
 #include <memory>
+#include <cmath>
 #include "angles/angles.h"
 #include "pluginlib/class_list_macros.hpp"
 #include "nav2_controller/plugins/feasible_path_handler.hpp"
@@ -69,6 +70,10 @@ void FeasiblePathHandler::initialize(
     plugin_name + ".enforce_path_rotation", false);
   inversion_xy_tolerance_ = node->declare_or_get_parameter(
     plugin_name + ".inversion_xy_tolerance", 0.2);
+  inversion_longitudinal_tolerance_ = node->declare_or_get_parameter(
+    plugin_name + ".inversion_longitudinal_tolerance", inversion_xy_tolerance_);
+  inversion_lateral_tolerance_ = node->declare_or_get_parameter(
+    plugin_name + ".inversion_lateral_tolerance", inversion_xy_tolerance_);
   inversion_yaw_tolerance_ = node->declare_or_get_parameter(
     plugin_name + ".inversion_yaw_tolerance", 0.4);
   minimum_rotation_angle_ = node->declare_or_get_parameter(
@@ -121,8 +126,50 @@ bool FeasiblePathHandler::isWithinInversionTolerances(
     tf2::getYaw(robot_pose.pose.orientation),
     tf2::getYaw(last_pose.pose.orientation));
 
-  return distance <= inversion_xy_tolerance_ &&
-         fabs(angle_distance) <= inversion_yaw_tolerance_;
+  return (distance <= inversion_xy_tolerance_ &&
+         fabs(angle_distance) <= inversion_yaw_tolerance_) ||
+         isWithinInversionLongitudinalTolerances(robot_pose);
+}
+
+bool FeasiblePathHandler::isWithinInversionLongitudinalTolerances(
+  const geometry_msgs::msg::PoseStamped & robot_pose) const
+{
+  if (constraint_locale_ < 2u || constraint_locale_ >= global_plan_.poses.size()) {
+    return false;
+  }
+
+  const auto & prev_pose = global_plan_.poses[constraint_locale_ - 2u].pose;
+  const auto & cusp_pose = global_plan_.poses[constraint_locale_ - 1u].pose;
+  const auto & next_pose = global_plan_.poses[constraint_locale_].pose;
+
+  const double incoming_x = cusp_pose.position.x - prev_pose.position.x;
+  const double incoming_y = cusp_pose.position.y - prev_pose.position.y;
+  const double outgoing_x = next_pose.position.x - cusp_pose.position.x;
+  const double outgoing_y = next_pose.position.y - cusp_pose.position.y;
+  const double incoming_norm = std::hypot(incoming_x, incoming_y);
+  const double outgoing_norm = std::hypot(outgoing_x, outgoing_y);
+  if (incoming_norm <= 1e-4 || outgoing_norm <= 1e-4) {
+    return false;
+  }
+
+  const double dot_product = incoming_x * outgoing_x + incoming_y * outgoing_y;
+  if (dot_product >= 0.0) {
+    return false;
+  }
+
+  const double ux = incoming_x / incoming_norm;
+  const double uy = incoming_y / incoming_norm;
+  const double robot_x = robot_pose.pose.position.x - cusp_pose.position.x;
+  const double robot_y = robot_pose.pose.position.y - cusp_pose.position.y;
+  const double longitudinal_error = robot_x * ux + robot_y * uy;
+  const double lateral_error = std::abs(robot_x * -uy + robot_y * ux);
+  const double angle_distance = angles::shortest_angular_distance(
+    tf2::getYaw(robot_pose.pose.orientation),
+    tf2::getYaw(cusp_pose.orientation));
+
+  return longitudinal_error >= -inversion_longitudinal_tolerance_ &&
+         lateral_error <= inversion_lateral_tolerance_ &&
+         std::abs(angle_distance) <= inversion_yaw_tolerance_;
 }
 
 void FeasiblePathHandler::setPlan(const nav_msgs::msg::Path & path)
@@ -312,6 +359,10 @@ FeasiblePathHandler::updateParametersCallback(
         max_robot_pose_search_dist_ = parameter.as_double();
       } else if (param_name == plugin_name_ + ".inversion_xy_tolerance") {
         inversion_xy_tolerance_ = parameter.as_double();
+      } else if (param_name == plugin_name_ + ".inversion_longitudinal_tolerance") {
+        inversion_longitudinal_tolerance_ = parameter.as_double();
+      } else if (param_name == plugin_name_ + ".inversion_lateral_tolerance") {
+        inversion_lateral_tolerance_ = parameter.as_double();
       } else if (param_name == plugin_name_ + ".inversion_yaw_tolerance") {
         inversion_yaw_tolerance_ = parameter.as_double();
       } else if (param_name == plugin_name_ + ".prune_distance") {

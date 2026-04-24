@@ -838,6 +838,30 @@ TEST_F(Tester, testToggleService)
   cm_->stop();
 }
 
+TEST_F(Tester, testDisabledMonitorPassesThroughWithInvalidSource)
+{
+  // Set parameters for collision monitor
+  setCommonParameters();
+  addPolygon("Stop", POLYGON, 1.0, "stop");
+  addSource(SCAN_NAME, SCAN);
+  setVectors({"Stop"}, {SCAN_NAME});
+
+  // Start collision monitor disabled, with no scan data available.
+  cm_->set_parameter(rclcpp::Parameter("enabled", false));
+  cm_->start();
+  ASSERT_FALSE(cm_->isEnabled());
+
+  publishCmdVel(0.5, 0.2, 0.1);
+  ASSERT_TRUE(waitCmdVel(500ms));
+  ASSERT_NEAR(cmd_vel_out_->linear.x, 0.5, EPSILON);
+  ASSERT_NEAR(cmd_vel_out_->linear.y, 0.2, EPSILON);
+  ASSERT_NEAR(cmd_vel_out_->angular.z, 0.1, EPSILON);
+  ASSERT_FALSE(waitActionState(100ms));
+
+  // Stop the collision monitor
+  cm_->stop();
+}
+
 TEST_F(Tester, testProcessStopSlowdownLimit)
 {
   rclcpp::Time curr_time = cm_->now();

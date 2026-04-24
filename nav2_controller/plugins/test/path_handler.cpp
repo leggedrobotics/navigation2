@@ -303,6 +303,51 @@ TEST(PathHandlerTests, TestInversionToleranceChecks)
   EXPECT_TRUE(handler.isWithinInversionTolerancesWrapper(robot_pose));
 }
 
+TEST(PathHandlerTests, TestInversionLongitudinalToleranceAllowsLateralOffset)
+{
+  nav_msgs::msg::Path path;
+  for (const double x : {0.0, 1.0, 2.0, 1.0, 0.0}) {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.pose.position.x = x;
+    pose.pose.orientation.w = 1.0;
+    path.poses.push_back(pose);
+  }
+
+  PathHandlerWrapper handler;
+  auto node = std::make_shared<nav2::LifecycleNode>("longitudinal_cusp_node");
+  node->declare_parameter("dummy.enforce_path_inversion", true);
+  node->declare_parameter("dummy.inversion_xy_tolerance", 0.2);
+  node->declare_parameter("dummy.inversion_longitudinal_tolerance", 0.05);
+  node->declare_parameter("dummy.inversion_lateral_tolerance", 0.5);
+  node->declare_parameter("dummy.inversion_yaw_tolerance", 0.7);
+  auto costmap_ros = std::make_shared<nav2_costmap_2d::Costmap2DROS>(
+    "dummy_costmap", "", true);
+  rclcpp_lifecycle::State state;
+  costmap_ros->on_configure(state);
+
+  handler.initialize(node, node->get_logger(), "dummy", costmap_ros, costmap_ros->getTfBuffer());
+  handler.setPlan(path);
+
+  geometry_msgs::msg::PoseStamped robot_pose;
+  robot_pose.pose.orientation.w = 1.0;
+
+  robot_pose.pose.position.x = 1.75;
+  robot_pose.pose.position.y = 0.0;
+  EXPECT_FALSE(handler.isWithinInversionTolerancesWrapper(robot_pose));
+
+  robot_pose.pose.position.x = 1.96;
+  robot_pose.pose.position.y = 0.45;
+  EXPECT_TRUE(handler.isWithinInversionTolerancesWrapper(robot_pose));
+
+  robot_pose.pose.position.x = 1.75;
+  robot_pose.pose.position.y = 0.45;
+  EXPECT_FALSE(handler.isWithinInversionTolerancesWrapper(robot_pose));
+
+  robot_pose.pose.position.x = 2.05;
+  robot_pose.pose.position.y = 0.55;
+  EXPECT_FALSE(handler.isWithinInversionTolerancesWrapper(robot_pose));
+}
+
 TEST(PathHandlerTests, TestTransformedGoal)
 {
   PathHandlerWrapper handler;
@@ -344,6 +389,8 @@ TEST(PathHandlerTests, TestDynamicParams)
   auto results = rec_param->set_parameters_atomically({
     rclcpp::Parameter("dummy.max_robot_pose_search_dist", 100.0),
     rclcpp::Parameter("dummy.inversion_xy_tolerance", 200.0),
+    rclcpp::Parameter("dummy.inversion_longitudinal_tolerance", 250.0),
+    rclcpp::Parameter("dummy.inversion_lateral_tolerance", 275.0),
     rclcpp::Parameter("dummy.inversion_yaw_tolerance", 300.0),
     rclcpp::Parameter("dummy.prune_distance", 400.0),
     rclcpp::Parameter("dummy.minimum_rotation_angle", 500.0),
@@ -357,6 +404,8 @@ TEST(PathHandlerTests, TestDynamicParams)
 
   EXPECT_EQ(node->get_parameter("dummy.max_robot_pose_search_dist").as_double(), 100.0);
   EXPECT_EQ(node->get_parameter("dummy.inversion_xy_tolerance").as_double(), 200.0);
+  EXPECT_EQ(node->get_parameter("dummy.inversion_longitudinal_tolerance").as_double(), 250.0);
+  EXPECT_EQ(node->get_parameter("dummy.inversion_lateral_tolerance").as_double(), 275.0);
   EXPECT_EQ(node->get_parameter("dummy.inversion_yaw_tolerance").as_double(), 300.0);
   EXPECT_EQ(node->get_parameter("dummy.prune_distance").as_double(), 400.0);
   EXPECT_EQ(node->get_parameter("dummy.minimum_rotation_angle").as_double(), 500.0);

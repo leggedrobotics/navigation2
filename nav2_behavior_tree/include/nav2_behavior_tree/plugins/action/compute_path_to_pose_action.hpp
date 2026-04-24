@@ -102,9 +102,6 @@ public:
           "start",
           "Used as the planner start pose instead of the current robot pose, if use_start is"
           " not false (i.e. not provided or set to true)"),
-        BT::InputPort<std::vector<geometry_msgs::msg::PoseStamped>>(
-          "viapoints",
-          "A list of intermediate viapoints (excluding goal) to consider for planning"),
         BT::InputPort<bool>(
           "use_start", "For using or not using (i.e. ignoring) the provided start pose"),
         BT::InputPort<std::string>(
