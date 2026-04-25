@@ -214,7 +214,7 @@ geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocity
   }
 
   // Setting the velocity direction
-  double x_vel_sign = getVelocitySign(transformed_plan, carrot_pose);
+  double x_vel_sign = getVelocitySign(transformed_plan, carrot_pose, lookahead_dist);
 
   linear_vel = params_->max_linear_vel;
 
@@ -358,7 +358,8 @@ bool RegulatedPurePursuitController::shouldRotateToGoalHeading(
 
 double RegulatedPurePursuitController::getVelocitySign(
   const nav_msgs::msg::Path & transformed_plan,
-  const geometry_msgs::msg::PoseStamped & carrot_pose)
+  const geometry_msgs::msg::PoseStamped & carrot_pose,
+  double lookahead_dist)
 {
   if (!params_->allow_reversing) {
     return 1.0;
@@ -379,6 +380,7 @@ double RegulatedPurePursuitController::getVelocitySign(
 
   size_t segment_idx = 0;
   bool found_segment = false;
+  double path_dist = 0.0;
   for (size_t i = 0; i + 1 < transformed_plan.poses.size(); ++i) {
     const auto & start = transformed_plan.poses[i].pose.position;
     const auto & end = transformed_plan.poses[i + 1].pose.position;
@@ -389,7 +391,10 @@ double RegulatedPurePursuitController::getVelocitySign(
 
     segment_idx = i;
     found_segment = true;
-    break;
+    if (path_dist + segment_dist >= lookahead_dist) {
+      break;
+    }
+    path_dist += segment_dist;
   }
 
   if (!found_segment) {

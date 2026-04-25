@@ -95,11 +95,14 @@ public:
     return shouldRotateToGoalHeading(carrot_pose);
   }
 
-  double getVelocitySignWrapper(const nav_msgs::msg::Path & path, double carrot_x = 0.0)
+  double getVelocitySignWrapper(
+    const nav_msgs::msg::Path & path,
+    double lookahead_dist = 0.0,
+    double carrot_x = 0.0)
   {
     geometry_msgs::msg::PoseStamped carrot_pose;
     carrot_pose.pose.position.x = carrot_x;
-    return getVelocitySign(path, carrot_pose);
+    return getVelocitySign(path, carrot_pose, lookahead_dist);
   }
 
   void setAllowReversing(bool allow_reversing)
@@ -564,8 +567,9 @@ TEST(RegulatedPurePursuitTest, reversingDirectionUsesCurrentPathSegmentDirection
   add_pose(0.0, 1.0, M_PI / 2.0);
   add_pose(0.0, 0.4, M_PI / 2.0);
 
-  EXPECT_EQ(ctrl->getVelocitySignWrapper(path, -0.08), 1.0);
-  EXPECT_EQ(ctrl->getVelocitySignWrapper(path, 0.08), 1.0);
+  EXPECT_EQ(ctrl->getVelocitySignWrapper(path, 0.2, -0.08), 1.0);
+  EXPECT_EQ(ctrl->getVelocitySignWrapper(path, 0.8, 0.08), 1.0);
+  EXPECT_EQ(ctrl->getVelocitySignWrapper(path, 1.2, 0.08), -1.0);
 
   nav_msgs::msg::Path reverse_path;
   auto add_reverse_pose = [&reverse_path](double x, double y, double yaw) {
@@ -579,15 +583,15 @@ TEST(RegulatedPurePursuitTest, reversingDirectionUsesCurrentPathSegmentDirection
   add_reverse_pose(0.0, 1.0, M_PI / 2.0);
   add_reverse_pose(0.0, 0.4, M_PI / 2.0);
 
-  EXPECT_EQ(ctrl->getVelocitySignWrapper(reverse_path, 0.08), -1.0);
-  EXPECT_EQ(ctrl->getVelocitySignWrapper(reverse_path, -0.08), -1.0);
+  EXPECT_EQ(ctrl->getVelocitySignWrapper(reverse_path, 0.2, 0.08), -1.0);
+  EXPECT_EQ(ctrl->getVelocitySignWrapper(reverse_path, 0.2, -0.08), -1.0);
 
   ctrl->setUsePathSegmentDirectionForReversing(false);
-  EXPECT_EQ(ctrl->getVelocitySignWrapper(path, -0.08), -1.0);
-  EXPECT_EQ(ctrl->getVelocitySignWrapper(reverse_path, 0.08), 1.0);
+  EXPECT_EQ(ctrl->getVelocitySignWrapper(path, 1.2, -0.08), -1.0);
+  EXPECT_EQ(ctrl->getVelocitySignWrapper(reverse_path, 0.2, 0.08), 1.0);
 
   ctrl->setAllowReversing(false);
-  EXPECT_EQ(ctrl->getVelocitySignWrapper(reverse_path, -0.08), 1.0);
+  EXPECT_EQ(ctrl->getVelocitySignWrapper(reverse_path, 0.2, -0.08), 1.0);
 
   ctrl->cleanup();
 }

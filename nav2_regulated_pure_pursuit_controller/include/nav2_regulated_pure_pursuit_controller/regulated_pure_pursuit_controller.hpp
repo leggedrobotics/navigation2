@@ -157,7 +157,8 @@ protected:
    */
   double getVelocitySign(
     const nav_msgs::msg::Path & transformed_plan,
-    const geometry_msgs::msg::PoseStamped & carrot_pose);
+    const geometry_msgs::msg::PoseStamped & carrot_pose,
+    double lookahead_dist);
 
   /**
    * @brief Create a smooth and kinematically smoothed rotation command
