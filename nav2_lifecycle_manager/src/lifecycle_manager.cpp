@@ -295,13 +295,38 @@ LifecycleManager::changeStateForNode(const std::string & node_name, std::uint8_t
 {
   message(transition_label_map_[transition] + node_name);
 
-  if (!node_map_[node_name]->change_state(
-      transition, std::chrono::milliseconds(-1),
-      service_timeout_) ||
-    !(node_map_[node_name]->get_state(service_timeout_) == transition_state_map_[transition]))
-  {
+  bool transition_response_ok = false;
+  try {
+    transition_response_ok = node_map_[node_name]->change_state(
+      transition, std::chrono::milliseconds(-1), service_timeout_);
+  } catch (const std::exception & ex) {
+    RCLCPP_WARN(
+      get_logger(),
+      "Change-state request for node %s did not return cleanly: %s",
+      node_name.c_str(), ex.what());
+  }
+
+  uint8_t current_state = State::PRIMARY_STATE_UNKNOWN;
+  try {
+    current_state = node_map_[node_name]->get_state(service_timeout_);
+  } catch (const std::exception & ex) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "Failed to query state for node %s after transition request: %s",
+      node_name.c_str(), ex.what());
+    return false;
+  }
+
+  if (current_state != transition_state_map_[transition]) {
     RCLCPP_ERROR(get_logger(), "Failed to change state for node: %s", node_name.c_str());
     return false;
+  }
+
+  if (!transition_response_ok) {
+    RCLCPP_WARN(
+      get_logger(),
+      "Change-state response for node %s was lost, but the node reached the requested state; continuing.",
+      node_name.c_str());
   }
 
   if (transition == Transition::TRANSITION_ACTIVATE) {
