@@ -298,22 +298,37 @@ LifecycleManager::changeStateForNode(const std::string & node_name, std::uint8_t
   bool transition_response_ok = false;
   try {
     transition_response_ok = node_map_[node_name]->change_state(
-      transition, std::chrono::milliseconds(-1), service_timeout_);
+      transition, service_timeout_, service_timeout_);
   } catch (const std::exception & ex) {
     RCLCPP_WARN(
       get_logger(),
-      "Change-state request for node %s did not return cleanly: %s",
-      node_name.c_str(), ex.what());
+      "Change-state request for node %s did not return cleanly within %ld ms: %s",
+      node_name.c_str(), service_timeout_.count(), ex.what());
   }
 
   uint8_t current_state = State::PRIMARY_STATE_UNKNOWN;
-  try {
-    current_state = node_map_[node_name]->get_state(service_timeout_);
-  } catch (const std::exception & ex) {
-    RCLCPP_ERROR(
-      get_logger(),
-      "Failed to query state for node %s after transition request: %s",
-      node_name.c_str(), ex.what());
+  bool state_query_ok = false;
+  for (int attempt = 1; attempt <= 3; ++attempt) {
+    try {
+      current_state = node_map_[node_name]->get_state(service_timeout_);
+      state_query_ok = true;
+      break;
+    } catch (const std::exception & ex) {
+      if (attempt == 3) {
+        RCLCPP_ERROR(
+          get_logger(),
+          "Failed to query state for node %s after transition request: %s",
+          node_name.c_str(), ex.what());
+      } else {
+        RCLCPP_WARN(
+          get_logger(),
+          "State query attempt %d for node %s failed after transition request: %s",
+          attempt, node_name.c_str(), ex.what());
+      }
+    }
+  }
+
+  if (!state_query_ok) {
     return false;
   }
 
