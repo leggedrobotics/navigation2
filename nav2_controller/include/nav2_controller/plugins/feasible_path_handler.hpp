@@ -134,6 +134,18 @@ protected:
     const geometry_msgs::msg::PoseStamped & robot_pose) const;
 
   /**
+    * @brief Check whether the robot has driven past the cusp beyond the
+    * overshoot tolerance along the incoming path direction, regardless of
+    * lateral or yaw error. Once a cusp is overshot this far, a non-holonomic
+    * base cannot recover the release corridor by continuing forward; the
+    * caller fails the control cycle (NoValidControl) so the behavior tree
+    * replans from the actual robot pose.
+    * @param robot_pose Robot's current pose to check
+    * @return bool If the robot has overshot the cusp beyond tolerance
+    */
+  bool isBeyondInversionOvershoot(const geometry_msgs::msg::PoseStamped & robot_pose) const;
+
+  /**
     * @brief Extends the pre-inversion plan slightly past the cusp along the
     * incoming direction so Ackermann controllers can finish aligning before
     * the reverse segment is exposed.
@@ -165,6 +177,7 @@ protected:
   float inversion_xy_tolerance_, inversion_yaw_tolerance_, minimum_rotation_angle_;
   float inversion_longitudinal_tolerance_, inversion_lateral_tolerance_;
   double inversion_forward_hold_distance_;
+  double inversion_overshoot_tolerance_;
 
   /**
    * @brief Validate incoming parameter updates before applying them.

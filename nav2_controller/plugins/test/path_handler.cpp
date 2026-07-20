@@ -66,6 +66,11 @@ public:
     return isWithinInversionTolerances(robot_pose);
   }
 
+  bool isBeyondInversionOvershootWrapper(const geometry_msgs::msg::PoseStamped & robot_pose)
+  {
+    return isBeyondInversionOvershoot(robot_pose);
+  }
+
   nav_msgs::msg::Path & getInvertedPath()
   {
     return global_plan_up_to_constraint_;
@@ -348,6 +353,93 @@ TEST(PathHandlerTests, TestInversionLongitudinalToleranceAllowsLateralOffset)
   EXPECT_FALSE(handler.isWithinInversionTolerancesWrapper(robot_pose));
 }
 
+TEST(PathHandlerTests, TestInversionOvershootDetected)
+{
+  // Path forward along +x to a cusp at x=2, then back. Overshoot tolerance 0.5:
+  // once the robot is more than 0.5 m PAST the cusp along the incoming
+  // direction, the overshoot predicate must fire regardless of lateral/yaw
+  // error (transformLocalPlan then throws NoValidControl so the BT replans),
+  // because continuing forward can never recover the release corridor.
+  nav_msgs::msg::Path path;
+  for (const double x : {0.0, 1.0, 2.0, 1.0, 0.0}) {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.pose.position.x = x;
+    pose.pose.orientation.w = 1.0;
+    path.poses.push_back(pose);
+  }
+
+  PathHandlerWrapper handler;
+  auto node = std::make_shared<nav2::LifecycleNode>("overshoot_cusp_node");
+  node->declare_parameter("dummy.enforce_path_inversion", true);
+  node->declare_parameter("dummy.inversion_xy_tolerance", 0.1);
+  node->declare_parameter("dummy.inversion_longitudinal_tolerance", 0.05);
+  node->declare_parameter("dummy.inversion_lateral_tolerance", 0.2);
+  node->declare_parameter("dummy.inversion_yaw_tolerance", 0.4);
+  node->declare_parameter("dummy.inversion_overshoot_tolerance", 0.5);
+  auto costmap_ros = std::make_shared<nav2_costmap_2d::Costmap2DROS>(
+    "dummy_costmap", "", true);
+  rclcpp_lifecycle::State state;
+  costmap_ros->on_configure(state);
+
+  handler.initialize(node, node->get_logger(), "dummy", costmap_ros, costmap_ros->getTfBuffer());
+  handler.setPlan(path);
+
+  geometry_msgs::msg::PoseStamped robot_pose;
+  robot_pose.pose.orientation.w = 1.0;
+
+  // Past the cusp but within overshoot tolerance, laterally off: no trigger.
+  robot_pose.pose.position.x = 2.3;
+  robot_pose.pose.position.y = 1.0;
+  EXPECT_FALSE(handler.isBeyondInversionOvershootWrapper(robot_pose));
+  EXPECT_FALSE(handler.isWithinInversionTolerancesWrapper(robot_pose));
+
+  // Beyond the overshoot tolerance: triggers even with large lateral error.
+  robot_pose.pose.position.x = 2.6;
+  robot_pose.pose.position.y = 1.0;
+  EXPECT_TRUE(handler.isBeyondInversionOvershootWrapper(robot_pose));
+
+  // Beyond overshoot with large yaw error too: still triggers.
+  robot_pose.pose.position.x = 2.6;
+  robot_pose.pose.position.y = -1.5;
+  robot_pose.pose.orientation.z = std::sin(1.2 / 2.0);
+  robot_pose.pose.orientation.w = std::cos(1.2 / 2.0);
+  EXPECT_TRUE(handler.isBeyondInversionOvershootWrapper(robot_pose));
+}
+
+TEST(PathHandlerTests, TestInversionOvershootDisabledByDefault)
+{
+  nav_msgs::msg::Path path;
+  for (const double x : {0.0, 1.0, 2.0, 1.0, 0.0}) {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.pose.position.x = x;
+    pose.pose.orientation.w = 1.0;
+    path.poses.push_back(pose);
+  }
+
+  PathHandlerWrapper handler;
+  auto node = std::make_shared<nav2::LifecycleNode>("overshoot_default_node");
+  node->declare_parameter("dummy.enforce_path_inversion", true);
+  node->declare_parameter("dummy.inversion_xy_tolerance", 0.1);
+  node->declare_parameter("dummy.inversion_lateral_tolerance", 0.2);
+  node->declare_parameter("dummy.inversion_yaw_tolerance", 0.4);
+  auto costmap_ros = std::make_shared<nav2_costmap_2d::Costmap2DROS>(
+    "dummy_costmap", "", true);
+  rclcpp_lifecycle::State state;
+  costmap_ros->on_configure(state);
+
+  handler.initialize(node, node->get_logger(), "dummy", costmap_ros, costmap_ros->getTfBuffer());
+  handler.setPlan(path);
+
+  // Far past the cusp, laterally off: with the default (0.0 = disabled) the
+  // legacy behavior is preserved and the overshoot predicate never fires.
+  geometry_msgs::msg::PoseStamped robot_pose;
+  robot_pose.pose.orientation.w = 1.0;
+  robot_pose.pose.position.x = 4.0;
+  robot_pose.pose.position.y = 1.0;
+  EXPECT_FALSE(handler.isBeyondInversionOvershootWrapper(robot_pose));
+  EXPECT_FALSE(handler.isWithinInversionTolerancesWrapper(robot_pose));
+}
+
 TEST(PathHandlerTests, TestInversionForwardHoldExtendsPreCuspPlan)
 {
   nav_msgs::msg::Path path;
@@ -424,6 +516,7 @@ TEST(PathHandlerTests, TestDynamicParams)
     rclcpp::Parameter("dummy.inversion_lateral_tolerance", 275.0),
     rclcpp::Parameter("dummy.inversion_yaw_tolerance", 300.0),
     rclcpp::Parameter("dummy.inversion_forward_hold_distance", 350.0),
+    rclcpp::Parameter("dummy.inversion_overshoot_tolerance", 375.0),
     rclcpp::Parameter("dummy.prune_distance", 400.0),
     rclcpp::Parameter("dummy.minimum_rotation_angle", 500.0),
     rclcpp::Parameter("dummy.enforce_path_inversion", true),
@@ -440,6 +533,7 @@ TEST(PathHandlerTests, TestDynamicParams)
   EXPECT_EQ(node->get_parameter("dummy.inversion_lateral_tolerance").as_double(), 275.0);
   EXPECT_EQ(node->get_parameter("dummy.inversion_yaw_tolerance").as_double(), 300.0);
   EXPECT_EQ(node->get_parameter("dummy.inversion_forward_hold_distance").as_double(), 350.0);
+  EXPECT_EQ(node->get_parameter("dummy.inversion_overshoot_tolerance").as_double(), 375.0);
   EXPECT_EQ(node->get_parameter("dummy.prune_distance").as_double(), 400.0);
   EXPECT_EQ(node->get_parameter("dummy.minimum_rotation_angle").as_double(), 500.0);
   EXPECT_EQ(node->get_parameter("dummy.enforce_path_inversion").as_bool(), true);
