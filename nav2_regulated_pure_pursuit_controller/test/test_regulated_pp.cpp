@@ -115,6 +115,36 @@ public:
     params_->use_path_segment_direction_for_reversing = use_path_segment_direction;
   }
 
+  void setMinimumTurningRadius(double radius)
+  {
+    params_->minimum_turning_radius = radius;
+  }
+
+  void setMaxAngularVel(double v)
+  {
+    params_->max_angular_vel = v;
+  }
+
+  void setMinAngularVel(double v)
+  {
+    params_->min_angular_vel = v;
+  }
+
+  void setUseDynamicWindow(bool v)
+  {
+    params_->use_dynamic_window = v;
+  }
+
+  void setUseCollisionDetection(bool v)
+  {
+    params_->use_collision_detection = v;
+  }
+
+  nav2_regulated_pure_pursuit_controller::Parameters * paramsHandle()
+  {
+    return params_;
+  }
+
   void rotateToHeadingWrapper(
     double & linear_vel, double & angular_vel,
     const double & angle_to_path, const geometry_msgs::msg::Twist & curr_speed)
@@ -467,6 +497,7 @@ TEST(RegulatedPurePursuitTest, testDynamicParameter)
       rclcpp::Parameter("test.inflation_cost_scaling_factor", 1.0),
       rclcpp::Parameter("test.allow_reversing", false),
       rclcpp::Parameter("test.use_path_segment_direction_for_reversing", true),
+      rclcpp::Parameter("test.minimum_turning_radius", 6.0),
       rclcpp::Parameter("test.use_rotate_to_heading", false),
       rclcpp::Parameter("test.stateful", false),
       rclcpp::Parameter("test.use_dynamic_window", true),
@@ -510,6 +541,7 @@ TEST(RegulatedPurePursuitTest, testDynamicParameter)
   EXPECT_EQ(
     node->get_parameter(
       "test.use_path_segment_direction_for_reversing").as_bool(), true);
+  EXPECT_EQ(node->get_parameter("test.minimum_turning_radius").as_double(), 6.0);
   EXPECT_EQ(node->get_parameter("test.use_rotate_to_heading").as_bool(), false);
   EXPECT_EQ(node->get_parameter("test.stateful").as_bool(), false);
   EXPECT_EQ(node->get_parameter("test.use_dynamic_window").as_bool(), true);
@@ -658,6 +690,329 @@ TEST(RegulatedPurePursuitTest, computeVelocityByDWPP)
 
   EXPECT_EQ(cmd_vel.twist.linear.x, 0.125);
   EXPECT_EQ(cmd_vel.twist.angular.z, 0.0);
+
+  ctrl->deactivate();
+  ctrl->cleanup();
+}
+
+// Shared helper: run one computeVelocityCommands cycle on a given plan and return the twist.
+// Uses the FeasiblePathHandler exactly like computeVelocityByDWPP does above.
+static geometry_msgs::msg::TwistStamped runControllerOnce(
+  BasicAPIRPP & ctrl,
+  nav2::LifecycleNode::SharedPtr node,
+  std::shared_ptr<tf2_ros::Buffer> tf,
+  std::shared_ptr<nav2_costmap_2d::Costmap2DROS> costmap,
+  const nav_msgs::msg::Path & plan)
+{
+  nav2_controller::FeasiblePathHandler path_handler;
+  path_handler.initialize(node, node->get_logger(), "path_handler", costmap, tf);
+
+  auto stamp = node->get_clock()->now();
+  ctrl.newPathReceived(plan);
+  path_handler.setPlan(plan);
+
+  geometry_msgs::msg::TransformStamped map_to_base;
+  map_to_base.header.stamp = stamp;
+  map_to_base.header.frame_id = "map";
+  map_to_base.child_frame_id = "base_link";
+  map_to_base.transform.rotation.w = 1.0;
+  tf->setTransform(map_to_base, "min-turn-radius-test");
+
+  geometry_msgs::msg::PoseStamped robot_pose;
+  robot_pose.header.frame_id = "base_link";
+  robot_pose.header.stamp = stamp;
+  robot_pose.pose.orientation.w = 1.0;
+  geometry_msgs::msg::Twist current_speed;
+  TestGoalChecker checker;
+
+  auto [closest_point, pruned_plan_end] = path_handler.findPlanSegment(robot_pose);
+  nav_msgs::msg::Path transformed_global_plan = path_handler.transformLocalPlan(
+    closest_point, pruned_plan_end);
+  auto goal = path_handler.getTransformedGoal(robot_pose.header.stamp);
+  return ctrl.computeVelocityCommands(
+    robot_pose, current_speed, &checker, transformed_global_plan, goal);
+}
+
+TEST(RegulatedPurePursuitTest, minimumTurningRadiusClampsCurvature)
+{
+  // A sharp left arc of radius 0.5 m; robot at origin heading +x; lookahead ~0.6 m.
+  // Without a clamp, |kappa| ~= 2.0. With minimum_turning_radius = 1.0, |kappa| <= 1.0.
+  auto ctrl = std::make_shared<BasicAPIRPP>();
+  auto node = std::make_shared<nav2::LifecycleNode>("testRPPClamp");
+  std::string name = "PathFollower";
+  auto tf = std::make_shared<tf2_ros::Buffer>(node->get_clock());
+  auto costmap = std::make_shared<nav2_costmap_2d::Costmap2DROS>("fake_costmap");
+  costmap->on_configure(rclcpp_lifecycle::State());
+  ctrl->configure(node, name, tf, costmap);
+  ctrl->activate();
+
+  ctrl->setUseCollisionDetection(false);
+
+  geometry_msgs::msg::PoseStamped start_pose;
+  start_pose.header.frame_id = "map";
+  start_pose.header.stamp = node->get_clock()->now();
+  start_pose.pose.orientation.w = 1.0;
+  auto plan = path_utils::generate_path(
+    start_pose, 0.05,
+    {std::make_unique<path_utils::LeftTurn>(0.5)});
+
+  // First: unclamped (minimum_turning_radius == 0.0). Expect |kappa| ~ 2 (== 1/0.5).
+  ctrl->setMinimumTurningRadius(0.0);
+  auto cmd_unclamped = runControllerOnce(*ctrl, node, tf, costmap, plan);
+  const double kappa_unclamped =
+    cmd_unclamped.twist.angular.z / cmd_unclamped.twist.linear.x;
+  EXPECT_GT(std::fabs(kappa_unclamped), 1.0 + 1e-3);  // curvature above 1/R
+
+  // Second: clamped to 1/1.0 = 1.0
+  ctrl->setMinimumTurningRadius(1.0);
+  auto cmd_clamped = runControllerOnce(*ctrl, node, tf, costmap, plan);
+  ASSERT_GT(std::fabs(cmd_clamped.twist.linear.x), 1e-6);
+  const double kappa_clamped =
+    cmd_clamped.twist.angular.z / cmd_clamped.twist.linear.x;
+  EXPECT_LE(std::fabs(kappa_clamped), 1.0 + 1e-6);
+
+  ctrl->deactivate();
+  ctrl->cleanup();
+}
+
+TEST(RegulatedPurePursuitTest, minimumTurningRadiusOmegaCapReducesV)
+{
+  // Force the omega cap to bind: set max_angular_vel below v_max * (1/R) so that the
+  // natural |omega| = |v * kappa| exceeds max_angular_vel. Verify that (a) v is reduced
+  // to omega_cap / |kappa| and (b) the curvature omega/v is preserved (== 1/R clamp).
+  auto ctrl = std::make_shared<BasicAPIRPP>();
+  auto node = std::make_shared<nav2::LifecycleNode>("testRPPOmegaCap");
+  std::string name = "PathFollower";
+  auto tf = std::make_shared<tf2_ros::Buffer>(node->get_clock());
+  auto costmap = std::make_shared<nav2_costmap_2d::Costmap2DROS>("fake_costmap");
+  costmap->on_configure(rclcpp_lifecycle::State());
+  ctrl->configure(node, name, tf, costmap);
+  ctrl->activate();
+
+  ctrl->setUseCollisionDetection(false);
+
+  // Regulation curvature will be clamped to 1/0.5 = 2.0. RPP's curvature/approach
+  // speed regulation determines the pre-cap v (it is well above 0.025 for this arc),
+  // so a cap of 0.05 rad/s is guaranteed to bind regardless of regulation internals:
+  // v must be reduced to 0.05 / 2.0 = 0.025 with curvature preserved exactly.
+  ctrl->setMinimumTurningRadius(0.5);
+  ctrl->setMaxAngularVel(0.05);
+  ctrl->setMinAngularVel(-0.05);
+
+  geometry_msgs::msg::PoseStamped start_pose;
+  start_pose.header.frame_id = "map";
+  start_pose.header.stamp = node->get_clock()->now();
+  start_pose.pose.orientation.w = 1.0;
+  // Radius-0.25 left arc gives raw |kappa| ~ 4, well above the clamp of 2.
+  auto plan = path_utils::generate_path(
+    start_pose, 0.05,
+    {std::make_unique<path_utils::LeftTurn>(0.25)});
+
+  auto cmd = runControllerOnce(*ctrl, node, tf, costmap, plan);
+  ASSERT_GT(std::fabs(cmd.twist.linear.x), 1e-6);
+
+  const double kappa_cmd = cmd.twist.angular.z / cmd.twist.linear.x;
+  // Curvature preserved at the clamp value 1/R = 2.0.
+  EXPECT_NEAR(std::fabs(kappa_cmd), 2.0, 1e-6);
+  // |omega| at its cap.
+  EXPECT_NEAR(std::fabs(cmd.twist.angular.z), 0.05, 1e-6);
+  // |v| reduced to omega_cap / |kappa| = 0.05 / 2.0 = 0.025.
+  EXPECT_NEAR(cmd.twist.linear.x, 0.025, 1e-6);
+
+  ctrl->deactivate();
+  ctrl->cleanup();
+}
+
+TEST(RegulatedPurePursuitTest, minimumTurningRadiusDefaultOffBitIdentical)
+{
+  // With minimum_turning_radius = 0.0 (default) the produced command must be identical
+  // to the pre-change behavior. We check invariance against a curved path in both the
+  // regular and dynamic-window branches by recording the command with the feature
+  // explicitly disabled and comparing to the same command produced fresh.
+  auto make_and_run = [&](bool use_dw, double min_radius) {
+      auto ctrl = std::make_shared<BasicAPIRPP>();
+      auto node = std::make_shared<nav2::LifecycleNode>("testRPPDefaultOff");
+      std::string name = "PathFollower";
+      auto tf = std::make_shared<tf2_ros::Buffer>(node->get_clock());
+      auto costmap = std::make_shared<nav2_costmap_2d::Costmap2DROS>("fake_costmap");
+      costmap->on_configure(rclcpp_lifecycle::State());
+      ctrl->configure(node, name, tf, costmap);
+      ctrl->activate();
+      ctrl->setUseCollisionDetection(false);
+      ctrl->setUseDynamicWindow(use_dw);
+      ctrl->setMinimumTurningRadius(min_radius);
+      // Wide omega envelope in both runs so the omega-cap logic cannot bind and the
+      // only difference under test is the feature gate itself.
+      ctrl->setMaxAngularVel(100.0);
+      ctrl->setMinAngularVel(-100.0);
+      geometry_msgs::msg::PoseStamped start_pose;
+      start_pose.header.frame_id = "map";
+      start_pose.header.stamp = node->get_clock()->now();
+      start_pose.pose.orientation.w = 1.0;
+      auto plan = path_utils::generate_path(
+        start_pose, 0.05,
+        {std::make_unique<path_utils::LeftTurn>(0.5)});
+      auto cmd = runControllerOnce(*ctrl, node, tf, costmap, plan);
+      ctrl->deactivate();
+      ctrl->cleanup();
+      return cmd;
+    };
+
+  // Regular (non-DWPP) path: value with the feature off should match the value with
+  // a tiny minimum_turning_radius (1e-6 m -> kappa_max = 1e6 1/m, clamp never binds).
+  auto cmd_off_regular = make_and_run(false, 0.0);
+  auto cmd_permissive_regular = make_and_run(false, 1e-6);
+  EXPECT_DOUBLE_EQ(cmd_off_regular.twist.linear.x, cmd_permissive_regular.twist.linear.x);
+  EXPECT_DOUBLE_EQ(cmd_off_regular.twist.angular.z, cmd_permissive_regular.twist.angular.z);
+
+  // Dynamic-window path: same invariant.
+  auto cmd_off_dwpp = make_and_run(true, 0.0);
+  auto cmd_permissive_dwpp = make_and_run(true, 1e-6);
+  EXPECT_DOUBLE_EQ(cmd_off_dwpp.twist.linear.x, cmd_permissive_dwpp.twist.linear.x);
+  EXPECT_DOUBLE_EQ(cmd_off_dwpp.twist.angular.z, cmd_permissive_dwpp.twist.angular.z);
+}
+
+TEST(RegulatedPurePursuitTest, minimumTurningRadiusRampsFromStandstillDWPP)
+{
+  // Closed-loop regression against an absorbing zero-velocity state: with the
+  // production configuration (dynamic window + curvature clamp active), repeated
+  // control cycles from standstill must ramp |v| up. The DWPP solver seeds its
+  // window from the internally stored last commanded velocity, so if any cycle
+  // collapses the command to (0, 0) the stall is permanent — this test spins the
+  // loop without resetting the plan to reproduce that feedback.
+  auto ctrl = std::make_shared<BasicAPIRPP>();
+  auto node = std::make_shared<nav2::LifecycleNode>("testRPPStandstillRamp");
+  std::string name = "PathFollower";
+  auto tf = std::make_shared<tf2_ros::Buffer>(node->get_clock());
+  auto costmap = std::make_shared<nav2_costmap_2d::Costmap2DROS>("fake_costmap");
+  costmap->on_configure(rclcpp_lifecycle::State());
+  ctrl->configure(node, name, tf, costmap);
+  ctrl->activate();
+
+  ctrl->setUseCollisionDetection(false);
+  ctrl->setUseDynamicWindow(true);
+  ctrl->setMinimumTurningRadius(6.0);
+  auto * params = ctrl->paramsHandle();
+  params->max_linear_vel = 0.5;
+  params->min_linear_vel = -0.5;
+  params->max_angular_vel = 0.0833;
+  params->min_angular_vel = -0.0833;
+  params->max_linear_accel = 1.0;
+  params->max_linear_decel = -1.0;
+  params->max_angular_accel = 0.25;
+  params->max_angular_decel = -0.25;
+  params->regulated_linear_scaling_min_radius = 12.0;
+  params->regulated_linear_scaling_min_speed = 0.3;
+  params->lookahead_dist = 0.7;
+  params->use_velocity_scaled_lookahead_dist = false;
+
+  geometry_msgs::msg::PoseStamped start_pose;
+  start_pose.header.frame_id = "map";
+  start_pose.header.stamp = node->get_clock()->now();
+  start_pose.pose.orientation.w = 1.0;
+  // Minimum-radius left arc: the tightest feasible production geometry.
+  auto plan = path_utils::generate_path(
+    start_pose, 0.05,
+    {std::make_unique<path_utils::LeftTurn>(6.0)});
+
+  nav2_controller::FeasiblePathHandler path_handler;
+  path_handler.initialize(node, node->get_logger(), "path_handler", costmap, tf);
+  ctrl->newPathReceived(plan);
+  path_handler.setPlan(plan);
+
+  geometry_msgs::msg::TransformStamped map_to_base;
+  map_to_base.header.stamp = node->get_clock()->now();
+  map_to_base.header.frame_id = "map";
+  map_to_base.child_frame_id = "base_link";
+  map_to_base.transform.rotation.w = 1.0;
+  tf->setTransform(map_to_base, "standstill-ramp-test", true);
+
+  geometry_msgs::msg::PoseStamped robot_pose;
+  robot_pose.header.frame_id = "base_link";
+  robot_pose.header.stamp = node->get_clock()->now();
+  robot_pose.pose.orientation.w = 1.0;
+  geometry_msgs::msg::Twist current_speed;
+  TestGoalChecker checker;
+
+  auto run_cycles = [&](const nav_msgs::msg::Path & p, int n) {
+      nav2_controller::FeasiblePathHandler handler2;
+      handler2.initialize(node, node->get_logger(), "path_handler2", costmap, tf);
+      ctrl->newPathReceived(p);
+      handler2.setPlan(p);
+      geometry_msgs::msg::Twist speed;
+      double max_v = 0.0;
+      for (int cycle = 0; cycle < n; ++cycle) {
+        auto [cp, ppe] = handler2.findPlanSegment(robot_pose);
+        nav_msgs::msg::Path tp = handler2.transformLocalPlan(cp, ppe);
+        auto g = handler2.getTransformedGoal(robot_pose.header.stamp);
+        auto cmd = ctrl->computeVelocityCommands(robot_pose, speed, &checker, tp, g);
+        speed = cmd.twist;
+        max_v = std::max(max_v, std::fabs(cmd.twist.linear.x));
+      }
+      return max_v;
+    };
+
+  double max_abs_v = 0.0;
+  for (int cycle = 0; cycle < 40; ++cycle) {
+    auto [closest_point, pruned_plan_end] = path_handler.findPlanSegment(robot_pose);
+    nav_msgs::msg::Path transformed_global_plan = path_handler.transformLocalPlan(
+      closest_point, pruned_plan_end);
+    auto goal = path_handler.getTransformedGoal(robot_pose.header.stamp);
+    auto cmd = ctrl->computeVelocityCommands(
+      robot_pose, current_speed, &checker, transformed_global_plan, goal);
+    current_speed = cmd.twist;
+    max_abs_v = std::max(max_abs_v, std::fabs(cmd.twist.linear.x));
+  }
+  // A healthy first cycle alone reaches ~max_linear_accel * dt = 0.05 m/s.
+  EXPECT_GT(max_abs_v, 0.04);
+
+  // Regression for the field-observed zero-lock: a nearly straight path whose
+  // curvature falls in [1e-6, 1e-3) — below the DWPP straightness threshold but
+  // above the old projection epsilon. The DWPP solver returns omega = 0 there;
+  // a projection that caps v by the RETURNED omega collapses the command to
+  // (0, 0) permanently. The huge-radius arc below has kappa ~= 5e-4.
+  auto near_straight_plan = path_utils::generate_path(
+    start_pose, 0.5,
+    {std::make_unique<path_utils::LeftTurn>(2000.0)});
+  const double max_v_near_straight = run_cycles(near_straight_plan, 40);
+  EXPECT_GT(max_v_near_straight, 0.04);
+
+  ctrl->deactivate();
+  ctrl->cleanup();
+}
+
+TEST(RegulatedPurePursuitTest, minimumTurningRadiusInDynamicWindow)
+{
+  // Same clamping invariant must hold on the DWPP exit path.
+  auto ctrl = std::make_shared<BasicAPIRPP>();
+  auto node = std::make_shared<nav2::LifecycleNode>("testRPPClampDWPP");
+  std::string name = "PathFollower";
+  auto tf = std::make_shared<tf2_ros::Buffer>(node->get_clock());
+  auto costmap = std::make_shared<nav2_costmap_2d::Costmap2DROS>("fake_costmap");
+  costmap->on_configure(rclcpp_lifecycle::State());
+  ctrl->configure(node, name, tf, costmap);
+  ctrl->activate();
+  ctrl->setUseCollisionDetection(false);
+  ctrl->setUseDynamicWindow(true);
+  ctrl->setMinimumTurningRadius(1.0);
+
+  geometry_msgs::msg::PoseStamped start_pose;
+  start_pose.header.frame_id = "map";
+  start_pose.header.stamp = node->get_clock()->now();
+  start_pose.pose.orientation.w = 1.0;
+  auto plan = path_utils::generate_path(
+    start_pose, 0.05,
+    {std::make_unique<path_utils::LeftTurn>(0.5)});
+
+  auto cmd = runControllerOnce(*ctrl, node, tf, costmap, plan);
+  if (std::fabs(cmd.twist.linear.x) > 1e-6) {
+    const double kappa_cmd = cmd.twist.angular.z / cmd.twist.linear.x;
+    EXPECT_LE(std::fabs(kappa_cmd), 1.0 + 1e-6);
+  } else {
+    // Fallback: DWPP corner-picked. Curvature-preserving cap should have kept |omega|
+    // in step with |v * kappa|; with v ~ 0 that requires omega ~ 0.
+    EXPECT_NEAR(cmd.twist.angular.z, 0.0, 1e-6);
+  }
 
   ctrl->deactivate();
   ctrl->cleanup();

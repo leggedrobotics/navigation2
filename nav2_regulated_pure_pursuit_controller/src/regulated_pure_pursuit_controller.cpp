@@ -213,6 +213,19 @@ geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocity
     curvature_carrot_pub_->publish(createCarrotMsg(curvature_lookahead_pose));
   }
 
+  // Enforce curvature feasibility: |kappa| <= 1/minimum_turning_radius.
+  // Applied to both the lookahead and regulation curvatures so that all downstream
+  // consumers (angular velocity command, dynamic window solver, collision checking)
+  // see a curvature the robot can physically execute. Disabled when
+  // minimum_turning_radius == 0.0 (default), preserving legacy behavior bit-identically.
+  if (params_->minimum_turning_radius > 0.0) {
+    const double max_abs_curvature = 1.0 / params_->minimum_turning_radius;
+    lookahead_curvature =
+      std::clamp(lookahead_curvature, -max_abs_curvature, max_abs_curvature);
+    regulation_curvature =
+      std::clamp(regulation_curvature, -max_abs_curvature, max_abs_curvature);
+  }
+
   // Setting the velocity direction
   double x_vel_sign = getVelocitySign(transformed_plan, carrot_pose, lookahead_dist);
 
@@ -258,6 +271,22 @@ geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocity
     // Apply curvature to angular velocity after constraining linear velocity
     if (!params_->use_dynamic_window) {
       angular_vel = linear_vel * regulation_curvature;
+      // Curvature-preserving omega cap: if the natural |omega| = |v * kappa| exceeds the
+      // angular velocity envelope, reduce |v| so that omega = v * kappa still holds at
+      // the cap. This prevents the arc from being flattened (omega saturated, v held).
+      // Guarded by minimum_turning_radius > 0.0 so default behavior is unchanged.
+      if (params_->minimum_turning_radius > 0.0) {
+        constexpr double kappa_eps = 1e-6;
+        if (std::fabs(regulation_curvature) >= kappa_eps) {
+          const double omega_cap = (angular_vel >= 0.0) ?
+            params_->max_angular_vel : -params_->min_angular_vel;
+          if (std::fabs(angular_vel) > omega_cap) {
+            const double v_sign = (linear_vel >= 0.0) ? 1.0 : -1.0;
+            linear_vel = v_sign * omega_cap / std::fabs(regulation_curvature);
+            angular_vel = linear_vel * regulation_curvature;
+          }
+        }
+      }
     } else {
       // compute optimal path tracking velocity commands
       // considering velocity and acceleration constraints (DWPP)
@@ -280,6 +309,42 @@ geometry_msgs::msg::TwistStamped RegulatedPurePursuitController::computeVelocity
         regulation_curvature,
         x_vel_sign,
         control_duration_);
+
+      // Curvature-preserving projection for the dynamic window path. When the DWPP
+      // solution leaves the kappa line (window/line no-intersection, e.g. cusp
+      // transients), reduce |v| so that omega = v * kappa holds with the best
+      // steering rate ACHIEVABLE this cycle (the window bound), rather than with
+      // the omega the solver happened to return. Capping by the returned omega is
+      // unsafe: below the solver's own straightness threshold (1e-3, see
+      // computeOptimalVelocityWithinDynamicWindow) it deliberately returns
+      // omega = 0, and projecting onto the line would collapse the command to
+      // (0, 0) permanently because the next window is seeded from the last
+      // command. For the same reason the projection is skipped entirely for
+      // near-straight curvature. Guarded by minimum_turning_radius > 0.0 so
+      // default behavior is unchanged.
+      if (params_->minimum_turning_radius > 0.0) {
+        constexpr double kappa_straight_eps = 1e-3;
+        if (std::fabs(regulation_curvature) >= kappa_straight_eps) {
+          const auto window = dynamic_window_pure_pursuit::computeDynamicWindow(
+            current_speed,
+            params_->max_linear_vel, params_->min_linear_vel,
+            params_->max_angular_vel, params_->min_angular_vel,
+            params_->max_linear_accel, params_->max_linear_decel,
+            params_->max_angular_accel, params_->max_angular_decel,
+            control_duration_);
+          const double omega_desired = linear_vel * regulation_curvature;
+          const double omega_achievable = std::clamp(
+            omega_desired, window.min_angular_vel, window.max_angular_vel);
+          double v_cap = 0.0;
+          if (omega_desired * omega_achievable > 0.0) {
+            v_cap = std::fabs(omega_achievable) / std::fabs(regulation_curvature);
+          }
+          const double v_mag = std::min(std::fabs(linear_vel), v_cap);
+          const double v_sign = (linear_vel >= 0.0) ? 1.0 : -1.0;
+          linear_vel = v_sign * v_mag;
+          angular_vel = linear_vel * regulation_curvature;
+        }
+      }
     }
   }
 
