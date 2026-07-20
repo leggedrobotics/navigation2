@@ -78,6 +78,8 @@ void FeasiblePathHandler::initialize(
     plugin_name + ".inversion_yaw_tolerance", 0.4);
   inversion_forward_hold_distance_ = node->declare_or_get_parameter(
     plugin_name + ".inversion_forward_hold_distance", 0.0);
+  inversion_overshoot_tolerance_ = node->declare_or_get_parameter(
+    plugin_name + ".inversion_overshoot_tolerance", 0.0);
   minimum_rotation_angle_ = node->declare_or_get_parameter(
     plugin_name + ".minimum_rotation_angle", 0.785);
   if (max_robot_pose_search_dist_ < 0.0) {
@@ -131,6 +133,42 @@ bool FeasiblePathHandler::isWithinInversionTolerances(
   return (distance <= inversion_xy_tolerance_ &&
          fabs(angle_distance) <= inversion_yaw_tolerance_) ||
          isWithinInversionLongitudinalTolerances(robot_pose);
+}
+
+bool FeasiblePathHandler::isBeyondInversionOvershoot(
+  const geometry_msgs::msg::PoseStamped & robot_pose) const
+{
+  if (inversion_overshoot_tolerance_ <= 0.0 ||
+    constraint_locale_ < 2u || constraint_locale_ >= global_plan_.poses.size())
+  {
+    return false;
+  }
+
+  const auto & prev_pose = global_plan_.poses[constraint_locale_ - 2u].pose;
+  const auto & cusp_pose = global_plan_.poses[constraint_locale_ - 1u].pose;
+  const auto & next_pose = global_plan_.poses[constraint_locale_].pose;
+
+  const double incoming_x = cusp_pose.position.x - prev_pose.position.x;
+  const double incoming_y = cusp_pose.position.y - prev_pose.position.y;
+  const double outgoing_x = next_pose.position.x - cusp_pose.position.x;
+  const double outgoing_y = next_pose.position.y - cusp_pose.position.y;
+  const double incoming_norm = std::hypot(incoming_x, incoming_y);
+  const double outgoing_norm = std::hypot(outgoing_x, outgoing_y);
+  if (incoming_norm <= 1e-4 || outgoing_norm <= 1e-4) {
+    return false;
+  }
+
+  if (incoming_x * outgoing_x + incoming_y * outgoing_y >= 0.0) {
+    return false;
+  }
+
+  const double ux = incoming_x / incoming_norm;
+  const double uy = incoming_y / incoming_norm;
+  const double robot_x = robot_pose.pose.position.x - cusp_pose.position.x;
+  const double robot_y = robot_pose.pose.position.y - cusp_pose.position.y;
+  const double longitudinal_error = robot_x * ux + robot_y * uy;
+
+  return longitudinal_error > inversion_overshoot_tolerance_;
 }
 
 bool FeasiblePathHandler::isWithinInversionLongitudinalTolerances(
@@ -325,6 +363,15 @@ nav_msgs::msg::Path FeasiblePathHandler::transformLocalPlan(
       constraint_locale_ = nav2_util::removePosesAfterFirstConstraint(global_plan_up_to_constraint_,
         enforce_path_inversion_, minimum_rotation_angle_);
       appendInversionForwardHoldPose();
+    } else if (isBeyondInversionOvershoot(global_pose_)) {
+      // The release corridor was missed and the robot is past the cusp: a
+      // non-holonomic base cannot recover this path by continuing, and
+      // tracking the stale post-cusp segment from an offset pose diverges.
+      // Fail the control cycle so the behavior tree replans from the actual
+      // robot pose.
+      throw nav2_core::NoValidControl(
+              "Cusp overshot beyond " + std::to_string(inversion_overshoot_tolerance_) +
+              " m without meeting the release corridor; replan required.");
     }
   }
 
@@ -403,6 +450,8 @@ FeasiblePathHandler::updateParametersCallback(
         inversion_yaw_tolerance_ = parameter.as_double();
       } else if (param_name == plugin_name_ + ".inversion_forward_hold_distance") {
         inversion_forward_hold_distance_ = parameter.as_double();
+      } else if (param_name == plugin_name_ + ".inversion_overshoot_tolerance") {
+        inversion_overshoot_tolerance_ = parameter.as_double();
       } else if (param_name == plugin_name_ + ".prune_distance") {
         prune_distance_ = parameter.as_double();
       } else if (param_name == plugin_name_ + ".minimum_rotation_angle") {

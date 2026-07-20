@@ -120,6 +120,9 @@ ParameterHandler::ParameterHandler(
   params_.use_path_segment_direction_for_reversing =
     node->declare_or_get_parameter(
     plugin_name_ + ".use_path_segment_direction_for_reversing", false);
+  params_.minimum_turning_radius =
+    node->declare_or_get_parameter(
+    plugin_name_ + ".minimum_turning_radius", 0.0);
 
   params_.interpolate_curvature_after_goal = node->declare_or_get_parameter(
     plugin_name_ + ".interpolate_curvature_after_goal", false);
@@ -284,6 +287,8 @@ ParameterHandler::updateParametersCallback(
         params_.rotate_to_heading_min_angle = parameter.as_double();
       } else if (param_name == plugin_name_ + ".approach_velocity_scaling_dist") {
         params_.approach_velocity_scaling_dist = parameter.as_double();
+      } else if (param_name == plugin_name_ + ".minimum_turning_radius") {
+        params_.minimum_turning_radius = parameter.as_double();
       }
     } else if (param_type == ParameterType::PARAMETER_BOOL) {
       if (param_name == plugin_name_ + ".use_velocity_scaled_lookahead_dist") {
