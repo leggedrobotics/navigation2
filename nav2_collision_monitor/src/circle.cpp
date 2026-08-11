@@ -39,6 +39,11 @@ Circle::~Circle()
   RCLCPP_INFO(logger_, "[%s]: Destroying Circle", polygon_name_.c_str());
 }
 
+void Circle::updatePolygon(const Velocity & cmd_vel_in)
+{
+  Polygon::updatePolygon(cmd_vel_in);
+}
+
 void Circle::getPolygon(std::vector<Point> & poly) const
 {
   // Number of polygon points. More edges means better approximation.

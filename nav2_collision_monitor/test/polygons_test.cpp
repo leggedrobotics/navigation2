@@ -577,6 +577,28 @@ TEST_F(Tester, testCircleGetParameters)
   EXPECT_NEAR(circle_->getRadiusSquared(), CIRCLE_RADIUS * CIRCLE_RADIUS, EPSILON);
 }
 
+TEST_F(Tester, testCircleVelocityUpdatePreservesRadius)
+{
+  createCircle("stop", true);
+
+  std::vector<nav2_collision_monitor::Point> polygon_before;
+  circle_->getPolygon(polygon_before);
+  ASSERT_TRUE(circle_->isShapeSet());
+
+  const nav2_collision_monitor::Velocity velocity{0.5, -0.2, 0.1};
+  circle_->updatePolygon(velocity);
+
+  std::vector<nav2_collision_monitor::Point> polygon_after;
+  circle_->getPolygon(polygon_after);
+  EXPECT_NEAR(circle_->getRadius(), CIRCLE_RADIUS, EPSILON);
+  EXPECT_NEAR(circle_->getRadiusSquared(), CIRCLE_RADIUS * CIRCLE_RADIUS, EPSILON);
+  ASSERT_EQ(polygon_after.size(), polygon_before.size());
+  for (std::size_t i = 0; i != polygon_before.size(); ++i) {
+    EXPECT_NEAR(polygon_after[i].x, polygon_before[i].x, EPSILON);
+    EXPECT_NEAR(polygon_after[i].y, polygon_before[i].y, EPSILON);
+  }
+}
+
 TEST_F(Tester, testPolygonUndeclaredActionType)
 {
   // "action_type" parameter is not initialized

@@ -54,6 +54,12 @@ public:
   ~Circle();
 
   /**
+   * @brief Preserve Polygon velocity-update behavior for Circle
+   * @param cmd_vel_in Robot twist command input
+   */
+  void updatePolygon(const Velocity & cmd_vel_in) override;
+
+  /**
    * @brief Gets polygon points, approximated to the circle.
    * To be used in visualization purposes.
    * @param poly Output polygon points (vertices)
