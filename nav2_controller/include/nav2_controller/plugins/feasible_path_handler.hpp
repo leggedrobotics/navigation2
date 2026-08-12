@@ -126,24 +126,15 @@ protected:
 
   /**
     * @brief Check whether the robot has reached the cusp along the incoming path
-    * direction while allowing lateral tracking error.
+    * direction. Before the cusp this uses the configured release corridor; at
+    * or beyond the cusp plane, once the final incoming segment is active, it
+    * releases unconditionally so the outgoing segment can recover tracking
+    * error.
     * @param robot_pose Robot's current pose to check
     * @return bool If the robot has reached the inversion constraint corridor
     */
   bool isWithinInversionLongitudinalTolerances(
     const geometry_msgs::msg::PoseStamped & robot_pose) const;
-
-  /**
-    * @brief Check whether the robot has driven past the cusp beyond the
-    * overshoot tolerance along the incoming path direction, regardless of
-    * lateral or yaw error. Once a cusp is overshot this far, a non-holonomic
-    * base cannot recover the release corridor by continuing forward; the
-    * caller fails the control cycle (NoValidControl) so the behavior tree
-    * replans from the actual robot pose.
-    * @param robot_pose Robot's current pose to check
-    * @return bool If the robot has overshot the cusp beyond tolerance
-    */
-  bool isBeyondInversionOvershoot(const geometry_msgs::msg::PoseStamped & robot_pose) const;
 
   /**
     * @brief Check whether the robot has passed the final path endpoint along
@@ -186,7 +177,6 @@ protected:
   float inversion_xy_tolerance_, inversion_yaw_tolerance_, minimum_rotation_angle_;
   float inversion_longitudinal_tolerance_, inversion_lateral_tolerance_;
   double inversion_forward_hold_distance_;
-  double inversion_overshoot_tolerance_;
   double terminal_overshoot_tolerance_;
 
   /**
