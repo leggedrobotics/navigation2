@@ -71,6 +71,11 @@ public:
     return isBeyondInversionOvershoot(robot_pose);
   }
 
+  bool isBeyondTerminalOvershootWrapper(const geometry_msgs::msg::PoseStamped & robot_pose)
+  {
+    return isBeyondTerminalOvershoot(robot_pose);
+  }
+
   nav_msgs::msg::Path & getInvertedPath()
   {
     return global_plan_up_to_constraint_;
@@ -440,6 +445,83 @@ TEST(PathHandlerTests, TestInversionOvershootDisabledByDefault)
   EXPECT_FALSE(handler.isWithinInversionTolerancesWrapper(robot_pose));
 }
 
+TEST(PathHandlerTests, TestTerminalOvershootUsesTheFinalTraversalDirection)
+{
+  PathHandlerWrapper handler;
+  auto node = std::make_shared<nav2::LifecycleNode>("terminal_overshoot_node");
+  node->declare_parameter("dummy.terminal_overshoot_tolerance", 0.35);
+  auto costmap_ros = std::make_shared<nav2_costmap_2d::Costmap2DROS>(
+    "dummy_costmap", "", true);
+  rclcpp_lifecycle::State state;
+  costmap_ros->on_configure(state);
+  handler.initialize(node, node->get_logger(), "dummy", costmap_ros, costmap_ros->getTfBuffer());
+
+  nav_msgs::msg::Path path;
+  for (const double x : {0.0, 1.0, 2.0, 2.0}) {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.pose.position.x = x;
+    pose.pose.orientation.w = 1.0;
+    path.poses.push_back(pose);
+  }
+
+  geometry_msgs::msg::PoseStamped robot_pose;
+  robot_pose.pose.orientation.w = 1.0;
+  robot_pose.pose.position.x = 2.36;
+  robot_pose.pose.position.y = 1.0;
+
+  // The final segment is not active while an earlier non-degenerate segment
+  // remains, even if the robot is already beyond the terminal plane.
+  handler.setGlobalPlanUpToInversion(path);
+  EXPECT_FALSE(handler.isBeyondTerminalOvershootWrapper(robot_pose));
+
+  path.poses.erase(path.poses.begin());
+  handler.setGlobalPlanUpToInversion(path);
+  robot_pose.pose.position.x = 2.34;
+  EXPECT_FALSE(handler.isBeyondTerminalOvershootWrapper(robot_pose));
+  robot_pose.pose.position.x = 2.36;
+  EXPECT_TRUE(handler.isBeyondTerminalOvershootWrapper(robot_pose));
+
+  // A reverse terminal leg uses its path traversal direction, not goal yaw.
+  path.poses.clear();
+  for (const double x : {1.0, 0.0, 0.0}) {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.pose.position.x = x;
+    pose.pose.orientation.w = 1.0;
+    path.poses.push_back(pose);
+  }
+  handler.setGlobalPlanUpToInversion(path);
+  robot_pose.pose.position.x = -0.36;
+  EXPECT_TRUE(handler.isBeyondTerminalOvershootWrapper(robot_pose));
+
+  path.poses[0].pose.position.x = 0.0;
+  handler.setGlobalPlanUpToInversion(path);
+  EXPECT_FALSE(handler.isBeyondTerminalOvershootWrapper(robot_pose));
+}
+
+TEST(PathHandlerTests, TestTerminalOvershootDisabledByDefault)
+{
+  PathHandlerWrapper handler;
+  auto node = std::make_shared<nav2::LifecycleNode>("terminal_overshoot_default_node");
+  auto costmap_ros = std::make_shared<nav2_costmap_2d::Costmap2DROS>(
+    "dummy_costmap", "", true);
+  rclcpp_lifecycle::State state;
+  costmap_ros->on_configure(state);
+  handler.initialize(node, node->get_logger(), "dummy", costmap_ros, costmap_ros->getTfBuffer());
+
+  nav_msgs::msg::Path path;
+  for (const double x : {1.0, 2.0}) {
+    geometry_msgs::msg::PoseStamped pose;
+    pose.pose.position.x = x;
+    pose.pose.orientation.w = 1.0;
+    path.poses.push_back(pose);
+  }
+  handler.setGlobalPlanUpToInversion(path);
+
+  geometry_msgs::msg::PoseStamped robot_pose;
+  robot_pose.pose.position.x = 10.0;
+  EXPECT_FALSE(handler.isBeyondTerminalOvershootWrapper(robot_pose));
+}
+
 TEST(PathHandlerTests, TestInversionForwardHoldExtendsPreCuspPlan)
 {
   nav_msgs::msg::Path path;
@@ -517,6 +599,7 @@ TEST(PathHandlerTests, TestDynamicParams)
     rclcpp::Parameter("dummy.inversion_yaw_tolerance", 300.0),
     rclcpp::Parameter("dummy.inversion_forward_hold_distance", 350.0),
     rclcpp::Parameter("dummy.inversion_overshoot_tolerance", 375.0),
+    rclcpp::Parameter("dummy.terminal_overshoot_tolerance", 390.0),
     rclcpp::Parameter("dummy.prune_distance", 400.0),
     rclcpp::Parameter("dummy.minimum_rotation_angle", 500.0),
     rclcpp::Parameter("dummy.enforce_path_inversion", true),
@@ -534,6 +617,7 @@ TEST(PathHandlerTests, TestDynamicParams)
   EXPECT_EQ(node->get_parameter("dummy.inversion_yaw_tolerance").as_double(), 300.0);
   EXPECT_EQ(node->get_parameter("dummy.inversion_forward_hold_distance").as_double(), 350.0);
   EXPECT_EQ(node->get_parameter("dummy.inversion_overshoot_tolerance").as_double(), 375.0);
+  EXPECT_EQ(node->get_parameter("dummy.terminal_overshoot_tolerance").as_double(), 390.0);
   EXPECT_EQ(node->get_parameter("dummy.prune_distance").as_double(), 400.0);
   EXPECT_EQ(node->get_parameter("dummy.minimum_rotation_angle").as_double(), 500.0);
   EXPECT_EQ(node->get_parameter("dummy.enforce_path_inversion").as_bool(), true);

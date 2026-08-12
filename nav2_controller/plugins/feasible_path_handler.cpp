@@ -80,6 +80,8 @@ void FeasiblePathHandler::initialize(
     plugin_name + ".inversion_forward_hold_distance", 0.0);
   inversion_overshoot_tolerance_ = node->declare_or_get_parameter(
     plugin_name + ".inversion_overshoot_tolerance", 0.0);
+  terminal_overshoot_tolerance_ = node->declare_or_get_parameter(
+    plugin_name + ".terminal_overshoot_tolerance", 0.0);
   minimum_rotation_angle_ = node->declare_or_get_parameter(
     plugin_name + ".minimum_rotation_angle", 0.785);
   if (max_robot_pose_search_dist_ < 0.0) {
@@ -169,6 +171,45 @@ bool FeasiblePathHandler::isBeyondInversionOvershoot(
   const double longitudinal_error = robot_x * ux + robot_y * uy;
 
   return longitudinal_error > inversion_overshoot_tolerance_;
+}
+
+bool FeasiblePathHandler::isBeyondTerminalOvershoot(
+  const geometry_msgs::msg::PoseStamped & robot_pose) const
+{
+  if (terminal_overshoot_tolerance_ <= 0.0 || constraint_locale_ != 0u ||
+    global_plan_up_to_constraint_.poses.size() < 2u)
+  {
+    return false;
+  }
+
+  const auto & poses = global_plan_up_to_constraint_.poses;
+  const auto & endpoint = poses.back().pose.position;
+  size_t segment_start = poses.size() - 1u;
+  double segment_x = 0.0;
+  double segment_y = 0.0;
+  double segment_norm = 0.0;
+  while (segment_start > 0u) {
+    --segment_start;
+    segment_x = endpoint.x - poses[segment_start].pose.position.x;
+    segment_y = endpoint.y - poses[segment_start].pose.position.y;
+    segment_norm = std::hypot(segment_x, segment_y);
+    if (segment_norm > 1e-4) {
+      break;
+    }
+  }
+
+  // Do not project onto the terminal tangent until normal path pruning has
+  // made the last non-degenerate segment active. This avoids triggering early
+  // on looping or self-intersecting paths that cross the terminal plane.
+  if (segment_norm <= 1e-4 || segment_start != 0u) {
+    return false;
+  }
+
+  const double ux = segment_x / segment_norm;
+  const double uy = segment_y / segment_norm;
+  const double robot_x = robot_pose.pose.position.x - endpoint.x;
+  const double robot_y = robot_pose.pose.position.y - endpoint.y;
+  return robot_x * ux + robot_y * uy > terminal_overshoot_tolerance_;
 }
 
 bool FeasiblePathHandler::isWithinInversionLongitudinalTolerances(
@@ -375,6 +416,13 @@ nav_msgs::msg::Path FeasiblePathHandler::transformLocalPlan(
     }
   }
 
+  if (isBeyondTerminalOvershoot(global_pose_)) {
+    throw nav2_core::NoValidControl(
+            "Terminal endpoint overshot beyond " +
+            std::to_string(terminal_overshoot_tolerance_) +
+            " m; replan required.");
+  }
+
   if (transformed_plan.poses.empty()) {
     throw nav2_core::InvalidPath("Resulting plan has 0 poses in it.");
   }
@@ -452,6 +500,8 @@ FeasiblePathHandler::updateParametersCallback(
         inversion_forward_hold_distance_ = parameter.as_double();
       } else if (param_name == plugin_name_ + ".inversion_overshoot_tolerance") {
         inversion_overshoot_tolerance_ = parameter.as_double();
+      } else if (param_name == plugin_name_ + ".terminal_overshoot_tolerance") {
+        terminal_overshoot_tolerance_ = parameter.as_double();
       } else if (param_name == plugin_name_ + ".prune_distance") {
         prune_distance_ = parameter.as_double();
       } else if (param_name == plugin_name_ + ".minimum_rotation_angle") {

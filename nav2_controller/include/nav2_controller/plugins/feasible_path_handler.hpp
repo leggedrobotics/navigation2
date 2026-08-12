@@ -146,6 +146,15 @@ protected:
   bool isBeyondInversionOvershoot(const geometry_msgs::msg::PoseStamped & robot_pose) const;
 
   /**
+    * @brief Check whether the robot has passed the final path endpoint along
+    * the last traversal direction. The check activates only after pruning has
+    * reduced the active path to its final non-degenerate segment.
+    * @param robot_pose Robot's current pose to check
+    * @return bool If the robot has overshot the terminal endpoint
+    */
+  bool isBeyondTerminalOvershoot(const geometry_msgs::msg::PoseStamped & robot_pose) const;
+
+  /**
     * @brief Extends the pre-inversion plan slightly past the cusp along the
     * incoming direction so Ackermann controllers can finish aligning before
     * the reverse segment is exposed.
@@ -178,6 +187,7 @@ protected:
   float inversion_longitudinal_tolerance_, inversion_lateral_tolerance_;
   double inversion_forward_hold_distance_;
   double inversion_overshoot_tolerance_;
+  double terminal_overshoot_tolerance_;
 
   /**
    * @brief Validate incoming parameter updates before applying them.
